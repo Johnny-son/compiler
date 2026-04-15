@@ -1,3 +1,5 @@
 .DS_Store
 /build
 /test/2023_function
+/test/contesttestcases
+/exp04-minic-expr
