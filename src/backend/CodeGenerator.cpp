@@ -1,17 +1,39 @@
+// 代码生成器共同类的实现
+
+#include <cstdio>
+#include <string>
+
+#include "ir/include/Module.h"
 #include "CodeGenerator.h"
 
-namespace compiler::backend {
-
-CodeGenerator::CodeGenerator(const ir::Module *module) : module_(module)
+// 构造函数
+CodeGenerator::CodeGenerator(Module * _module) : module(_module)
 {}
 
-Status CodeGenerator::run(const std::string &output_file)
+// 代码产生器运行，结果保存到指定的文件中
+bool CodeGenerator::run(std::string outFileName)
 {
-    if (module_ == nullptr) {
-        return compiler::Status::Error("code generation requires a valid IR module");
-    }
+	// 打开文件，也可以以C++的方式打开文件进行操作
+	// 这里主要便于C语言学习的学生
+	if (!outFileName.empty()) {
+		// 指定文件非空时，则创建文件
+		fp = fopen(outFileName.c_str(), "w");
+		if (nullptr == fp) {
+			printf("open file(%s) failed", outFileName.c_str());
+			return false;
+		}
+	} else {
+		fp = nullptr;
+	}
 
-    return emit_to_file(output_file);
+	// 执行真正的代码
+	const bool result = run();
+
+	// 关闭文件
+	if (fp) {
+		fclose(fp);
+		fp = nullptr;
+	}
+
+	return result;
 }
-
-} // namespace compiler::backend

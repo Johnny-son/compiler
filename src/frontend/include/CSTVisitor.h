@@ -1,0 +1,89 @@
+// Antlr4的具体语法树的遍历产生AST
+
+#pragma once
+
+#include "AST.h"
+#include "MiniCBaseVisitor.h"
+
+/// @brief 遍历具体语法树产生抽象语法树
+class MiniCCSTVisitor : public MiniCBaseVisitor {
+
+public:
+	//构造函数
+	MiniCCSTVisitor();
+
+	// 析构函数
+	virtual ~MiniCCSTVisitor();
+
+	// 遍历CST产生AST
+	ast_node * run(MiniCParser::CompUnitContext * root);
+
+protected:
+	/* 下面的函数都是从MiniCBaseVisitor继承下来的虚拟函数，需要重载实现 */
+
+	// 非终结运算符compUnit的遍历
+	std::any visitCompUnit(MiniCParser::CompUnitContext * ctx) override;
+
+	// 非终结运算符funcDef的遍历
+	std::any visitFuncDef(MiniCParser::FuncDefContext * ctx) override;
+
+	// 非终结运算符block的遍历
+	std::any visitBlock(MiniCParser::BlockContext * ctx) override;
+
+	// 非终结运算符blockItemList的遍历
+	std::any visitBlockItemList(MiniCParser::BlockItemListContext * ctx) override;
+
+	// 非终结运算符blockItem的遍历
+	std::any visitBlockItem(MiniCParser::BlockItemContext * ctx) override;
+
+	// 非终结运算符statement中的遍历
+	std::any visitStatement(MiniCParser::StatementContext * ctx);
+
+	// 非终结运算符statement中的returnStatement的遍历
+	std::any visitReturnStatement(MiniCParser::ReturnStatementContext * ctx) override;
+
+	// 非终结运算符expr的遍历
+	std::any visitExpr(MiniCParser::ExprContext * ctx) override;
+
+	// 内部产生的非终结符assignStatement的分析
+	std::any visitAssignStatement(MiniCParser::AssignStatementContext * ctx) override;
+
+	// 内部产生的非终结符blockStatement的分析
+	std::any visitBlockStatement(MiniCParser::BlockStatementContext * ctx) override;
+
+	// 非终结符AddExp的分析
+	std::any visitAddExp(MiniCParser::AddExpContext * ctx) override;
+
+	// 非终结符MulExp的分析
+	std::any visitMulExp(MiniCParser::MulExpContext * ctx) override;
+
+	// 非终结符addOp的分析
+	std::any visitAddOp(MiniCParser::AddOpContext * ctx) override;
+
+	// 非终结符mulOp的分析
+	std::any visitMulOp(MiniCParser::MulOpContext * ctx) override;
+
+	// 非终结符unaryExp的分析
+	std::any visitUnaryExp(MiniCParser::UnaryExpContext * ctx) override;
+
+	// 非终结符PrimaryExp的分析
+	std::any visitPrimaryExp(MiniCParser::PrimaryExpContext * ctx) override;
+
+	// 非终结符LVal的分析
+	std::any visitLVal(MiniCParser::LValContext * ctx) override;
+
+	// 非终结符VarDecl的分析
+	std::any visitVarDecl(MiniCParser::VarDeclContext * ctx) override;
+
+	// 非终结符VarDecl的分析
+	std::any visitVarDef(MiniCParser::VarDefContext * ctx) override;
+
+	// 非终结符BasicType的分析
+	std::any visitBasicType(MiniCParser::BasicTypeContext * ctx) override;
+
+	// 非终结符RealParamList的分析
+	std::any visitRealParamList(MiniCParser::RealParamListContext * ctx) override;
+
+	// 非终结符ExpressionStatement的分析
+	std::any visitExpressionStatement(MiniCParser::ExpressionStatementContext * context) override;
+};
