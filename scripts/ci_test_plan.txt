@@ -1,0 +1,54 @@
+# One target per line.
+# Targets use the same syntax as run_ci_tests.sh:
+#   2023_function
+#   2023_func_00_main.c
+#   2023_func_00_main
+#   test/contesttestcases/2023_function/2023_func_00_main.c
+
+ast:
+
+ir:
+2023_func_00_main.c
+2023_func_01_var_defn2.c
+2023_func_02_var_defn3.c
+# 2023_func_03_arr_defn2.c
+# 2023_func_04_arr_defn3.c
+# 2023_func_05_arr_defn4.c
+# 2023_func_06_const_var_defn2.c
+# 2023_func_07_const_var_defn3.c
+# 2023_func_08_const_array_defn.c
+# 2023_func_09_func_defn.c
+2023_func_10_var_defn_func.c
+2023_func_11_add2.c
+# 2023_func_12_addc.c
+# 2023_func_13_sub2.c
+2023_func_14_subc.c
+2023_func_15_mul.c
+# 2023_func_16_mulc.c
+2023_func_17_div.c
+# 2023_func_18_divc.c
+2023_func_19_mod.c
+2023_func_20_rem.c
+
+asm:
+2023_func_00_main.c
+2023_func_01_var_defn2.c
+2023_func_02_var_defn3.c
+# 2023_func_03_arr_defn2.c
+# 2023_func_04_arr_defn3.c
+# 2023_func_05_arr_defn4.c
+# 2023_func_06_const_var_defn2.c
+# 2023_func_07_const_var_defn3.c
+# 2023_func_08_const_array_defn.c
+# 2023_func_09_func_defn.c
+2023_func_10_var_defn_func.c
+2023_func_11_add2.c
+# 2023_func_12_addc.c
+# 2023_func_13_sub2.c
+2023_func_14_subc.c
+2023_func_15_mul.c
+# 2023_func_16_mulc.c
+2023_func_17_div.c
+# 2023_func_18_divc.c
+2023_func_19_mod.c
+2023_func_20_rem.c

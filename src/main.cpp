@@ -7,7 +7,10 @@
 #include "frontend/include/Graph.h"
 #include "ir/include/Module.h"
 #include "ir/include/IRGenerator.h"
-// #include "backend/include/CodeGenerator.h"
+#if MINIC_ENABLE_BACKEND
+#include "backend/include/CodeGenerator.h"
+#include "backend/riscv64/CodeGeneratorRiscv64.h"
+#endif
 
 using namespace std;
 
@@ -239,23 +242,29 @@ static int compile(string inputFile, string outputFile)
 
 
 		// ===后端执行，体系结果相关的操作===
-		// if (gShowASM) {
+		if (gShowASM) {
+#if MINIC_ENABLE_BACKEND
+			CodeGenerator * code_generator = nullptr;
 
-		// 	CodeGenerator * code_generator = nullptr;
+			if (gCPUTarget == "RISCV64") {
+				code_generator = new CodeGeneratorRiscv64(module);
+				code_generator->setShowLinearIR(gAsmAlsoShowIR);
+				if (!code_generator->run(outputFile)) {
+					Status::Error("后端汇编生成失败");
+					delete code_generator;
+					break;
+				}
+			} else {
+				Status::Error("指定的目标CPU架构(%s)不支持", gCPUTarget.c_str());
+				break;
+			}
 
-		// 	if (gCPUTarget == "RISCV64") {
-		// 		// 输出面向ARM32的汇编指令
-		// 		code_generator = new CodeGeneratorRiscv64(module);
-		// 		code_generator->setShowLinearIR(gAsmAlsoShowIR);
-		// 		code_generator->run(outputFile);
-		// 	} else {
-		// 		// 不支持指定的CPU架构
-		// 		Status::Error("指定的目标CPU架构(%s)不支持", gCPUTarget.c_str());
-		// 		break;
-		// 	}
-
-		// 	delete code_generator;
-		// }
+			delete code_generator;
+#else
+			Status::Error("当前构建未启用后端");
+			break;
+#endif
+		}
 
 		// 清理符号表
 		module->Delete();
