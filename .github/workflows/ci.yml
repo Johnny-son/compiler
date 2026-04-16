@@ -16,9 +16,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            clang \
             cmake \
-            ninja-build \
+            g++ \
             flex \
             bison \
             graphviz \
@@ -45,13 +44,10 @@ jobs:
           sudo cmake --install /tmp/antlr4-cpp-runtime-4.12.0-source/build
 
       - name: Configure
-        run: |
-          cmake -B build -S . -G Ninja \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_CXX_COMPILER=clang++
+        run: cmake -S . -B build
 
       - name: Build
-        run: cmake --build build --parallel
+        run: cmake --build build -j
 
       - name: Run CI Test Plan
         run: bash scripts/run_ci_tests.sh --all
