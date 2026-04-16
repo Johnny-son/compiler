@@ -158,30 +158,15 @@ resolve_compiler_for_mode() {
     return 0
   fi
 
-  if [[ "${suite_mode}" == "asm" ]]; then
-    for candidate in \
-      "${REPO_ROOT}/build/compiler" \
-      "${REPO_ROOT}/build-docker/compiler" \
-      "${REPO_ROOT}/build-docker-backend/compiler"; do
-      if [[ -x "${candidate}" ]]; then
-        printf '%s\n' "${candidate}"
-        return 0
-      fi
-    done
-  else
-    for candidate in \
-      "${REPO_ROOT}/build-nobackend/compiler" \
-      "${REPO_ROOT}/build-docker-nobackend/compiler" \
-      "${REPO_ROOT}/build-docker-nobackend2/compiler" \
-      "${REPO_ROOT}/build/compiler" \
-      "${REPO_ROOT}/build-docker/compiler" \
-      "${REPO_ROOT}/build-docker-backend/compiler"; do
-      if [[ -x "${candidate}" ]]; then
-        printf '%s\n' "${candidate}"
-        return 0
-      fi
-    done
-  fi
+  for candidate in \
+    "${REPO_ROOT}/build/compiler" \
+    "${REPO_ROOT}/build-docker/compiler" \
+    "${REPO_ROOT}/build-docker-backend/compiler"; do
+    if [[ -x "${candidate}" ]]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
 
   echo "No suitable compiler binary found for $(mode_label "${suite_mode}"). Use --compiler <path>." >&2
   exit 1

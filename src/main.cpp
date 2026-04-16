@@ -7,10 +7,8 @@
 #include "frontend/include/Graph.h"
 #include "ir/include/Module.h"
 #include "ir/include/IRGenerator.h"
-#if MINIC_ENABLE_BACKEND
 #include "backend/include/CodeGenerator.h"
 #include "backend/riscv64/CodeGeneratorRiscv64.h"
-#endif
 
 using namespace std;
 
@@ -243,7 +241,6 @@ static int compile(string inputFile, string outputFile)
 
 		// ===后端执行，体系结果相关的操作===
 		if (gShowASM) {
-#if MINIC_ENABLE_BACKEND
 			CodeGenerator * code_generator = nullptr;
 
 			if (gCPUTarget == "RISCV64") {
@@ -260,10 +257,6 @@ static int compile(string inputFile, string outputFile)
 			}
 
 			delete code_generator;
-#else
-			Status::Error("当前构建未启用后端");
-			break;
-#endif
 		}
 
 		// 清理符号表

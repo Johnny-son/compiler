@@ -9,12 +9,6 @@ cmake -S . -B build
 cmake --build build -j
 ```
 
-排除后端构建:  
-```sh
-cmake -S . -B build-nobackend -DMINIC_ENABLE_BACKEND=OFF
-cmake --build build-nobackend -j
-```
-
 生成 AST 图片:  
 ```sh
 cd build && ./compiler -S -T -A -o ./output.png ../test/contesttestcases/2023_function/2023_func_00_main.c

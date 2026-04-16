@@ -1,6 +1,5 @@
 .DS_Store
 build
-build-nobackend
 .vscode
 .antlr
 /exp04-minic-expr
