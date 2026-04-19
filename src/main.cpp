@@ -7,8 +7,7 @@
 #include "frontend/include/Graph.h"
 #include "ir/include/Module.h"
 #include "ir/include/IRGenerator.h"
-#include "backend/include/CodeGenerator.h"
-#include "backend/riscv64/CodeGeneratorRiscv64.h"
+#include "backend/include/BackendDriver.h"
 
 using namespace std;
 
@@ -241,22 +240,16 @@ static int compile(string inputFile, string outputFile)
 
 		// ===后端执行，体系结果相关的操作===
 		if (gShowASM) {
-			CodeGenerator * code_generator = nullptr;
-
 			if (gCPUTarget == "RISCV64") {
-				code_generator = new CodeGeneratorRiscv64(module);
-				code_generator->setShowLinearIR(gAsmAlsoShowIR);
-				if (!code_generator->run(outputFile)) {
+				BackendDriver backendDriver;
+				if (!backendDriver.run(module, outputFile)) {
 					Status::Error("后端汇编生成失败");
-					delete code_generator;
 					break;
 				}
 			} else {
 				Status::Error("指定的目标CPU架构(%s)不支持", gCPUTarget.c_str());
 				break;
 			}
-
-			delete code_generator;
 		}
 
 		// 清理符号表
