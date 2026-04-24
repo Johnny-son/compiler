@@ -24,7 +24,8 @@ Testing/
 *.dylib
 *.dll
 *.exe
-*.out
+*.out #.out也会被用于test时的输出文件，所以应该细粒度地控制哪些.out文件被忽略，哪些不被忽略
+!test/*.out
 
 # Logs / temp files
 *.log
