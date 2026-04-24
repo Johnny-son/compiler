@@ -330,10 +330,24 @@ parse_expected_errors() {
       break
     fi
 
-    if [[ "$line" =~ ^[[:space:]]*//[[:space:]]*@expected-error[[:space:]]+E([0-9]{4})[[:space:]]+([^[:space:]]+)[[:space:]]+at[[:space:]]+line[[:space:]]+(-?[0-9]+)[[:space:]]*$ ]]; then
-      printf '%s:%s:%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
-    elif [[ "$line" =~ ^[[:space:]]*/\*[[:space:]]*@expected-error[[:space:]]+E([0-9]{4})[[:space:]]+([^[:space:]]+)[[:space:]]+at[[:space:]]+line[[:space:]]+(-?[0-9]+)[[:space:]]*\*/[[:space:]]*$ ]]; then
-      printf '%s:%s:%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
+    # 匹配 // @expected-error E#### key_symbol at line N
+    # key_symbol 允许包含空格，用 (.+) 贪婪匹配到 " at line" 之前
+    if [[ "$line" =~ ^[[:space:]]*//[[:space:]]*@expected-error[[:space:]]+(E[0-9]{4})[[:space:]]+(.+)[[:space:]]+at[[:space:]]+line[[:space:]]+(-?[0-9]+)[[:space:]]*$ ]]; then
+      local ecode="${BASH_REMATCH[1]}"
+      local ekey="${BASH_REMATCH[2]}"
+      local eline="${BASH_REMATCH[3]}"
+      # trim 两端空格
+      while [[ "$ekey" =~ ^[[:space:]]+(.*)$ ]]; do ekey="${BASH_REMATCH[1]}"; done
+      while [[ "$ekey" =~ ^(.*[^[:space:]])[[:space:]]+$ ]]; do ekey="${BASH_REMATCH[1]}"; done
+      printf '%s:%s:%s\n' "$ecode" "$ekey" "$eline"
+    # 匹配 /* @expected-error ... */
+    elif [[ "$line" =~ ^[[:space:]]*/\*[[:space:]]*@expected-error[[:space:]]+(E[0-9]{4})[[:space:]]+(.+)[[:space:]]+at[[:space:]]+line[[:space:]]+(-?[0-9]+)[[:space:]]*\*/[[:space:]]*$ ]]; then
+      local ecode2="${BASH_REMATCH[1]}"
+      local ekey2="${BASH_REMATCH[2]}"
+      local eline2="${BASH_REMATCH[3]}"
+      while [[ "$ekey2" =~ ^[[:space:]]+(.*)$ ]]; do ekey2="${BASH_REMATCH[1]}"; done
+      while [[ "$ekey2" =~ ^(.*[^[:space:]])[[:space:]]+$ ]]; do ekey2="${BASH_REMATCH[1]}"; done
+      printf '%s:%s:%s\n' "$ecode2" "$ekey2" "$eline2"
     fi
   done < "${case_file}"
 }
@@ -548,7 +562,7 @@ run_err_suite() {
 
     actual_errors=()
     while IFS= read -r line || [[ -n "${line}" ]]; do
-      if [[ "${line}" =~ IR错误\[E([0-9]{4})\][[:space:]]+(第([0-9]+)行|未知行)[[:space:]]+[^:]+:[[:space:]]+(.+) ]]; then
+      if [[ "${line}" =~ IR错误\[(E[0-9]{4})\][[:space:]]+(第([0-9]+)行|未知行)[[:space:]]+[^:]+:[[:space:]]+(.+) ]]; then
         actual_code="${BASH_REMATCH[1]}"
         if [[ "${BASH_REMATCH[2]}" == 第*行 ]]; then
           actual_line="${BASH_REMATCH[3]}"
@@ -568,7 +582,21 @@ run_err_suite() {
         IFS=':' read -r a_code a_key a_line <<< "${actual_err}"
 
         if [[ "${a_code}" == "${err_code}" ]]; then
-          if [[ "${a_key}" == *"${key_sym}"* ]] || [[ "${a_key}" == "${key_sym}" ]]; then
+          # key_sym 可能是逗号分隔的多个符号，全部命中才算匹配
+          local all_found=1
+          local IFS_OLD="$IFS"
+          IFS=','
+          for sym in ${key_sym}; do
+            # trim 两端空格
+            sym="$(echo -n "$sym" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            if [[ -n "$sym" ]] && [[ "${a_key}" != *"${sym}"* ]]; then
+              all_found=0
+              break
+            fi
+          done
+          IFS="$IFS_OLD"
+
+          if [[ ${all_found} -eq 1 ]]; then
             if [[ "${err_line}" == "-1" ]] || [[ "${a_line}" == "${err_line}" ]]; then
               match_found=1
               matched=$((matched + 1))

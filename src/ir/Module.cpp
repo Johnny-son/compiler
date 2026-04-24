@@ -22,8 +22,55 @@
 #include "ir/Values/FormalParam.h"
 #include "ir/Values/LocalVariable.h"
 #include "utils/Status.h"
+#include <cstdarg>
+#include <vector>
 
 namespace {
+
+std::string format_detail(const char * format, va_list args)
+{
+    if (format == nullptr) {
+        return "";
+    }
+
+    va_list args_copy;
+    va_copy(args_copy, args);
+    const int message_size = std::vsnprintf(nullptr, 0, format, args_copy);
+    va_end(args_copy);
+
+    if (message_size < 0) {
+        return format;
+    }
+
+    std::vector<char> buffer(static_cast<std::size_t>(message_size) + 1);
+    std::vsnprintf(buffer.data(), buffer.size(), format, args);
+    return std::string(buffer.data(), static_cast<std::size_t>(message_size));
+}
+
+void report_module_error(const char * error_code, int64_t lineno, const char * category, const char * detail_format, ...)
+{
+    va_list args;
+    va_start(args, detail_format);
+    std::string detail = format_detail(detail_format, args);
+    va_end(args);
+
+    if (lineno > 0) {
+        Status::Error(
+            "IR错误[%s] 第%lld行 %s: %s",
+            error_code,
+            (long long) lineno,
+            category != nullptr ? category : "未知类别",
+            detail.c_str());
+    } else {
+        Status::Error(
+            "IR错误[%s] 未知行 %s: %s",
+            error_code,
+            category != nullptr ? category : "未知类别",
+            detail.c_str());
+    }
+}
+
+} // namespace
 
 struct LLVMEmitState {
 	FILE * fp = nullptr;
@@ -308,7 +355,6 @@ void emitLLVMFunctionDefinition(FILE * fp, Function * func)
 	fputs("}\n", fp);
 }
 
-} // namespace
 
 Module::Module(std::string _name) : name(_name)
 {
@@ -469,12 +515,12 @@ ConstInt * Module::findConstInt(int32_t val)
 /// @brief 在当前的作用域中查找，若没有查找到则创建局部变量或者全局变量。请注意不能创建临时变量
 /// ! 该函数只有在AST遍历生成线性IR中使用，其它地方不能使用
 /// @param type 变量类型
-/// @param name 变量ID 局部变量时可以为空，目的为了SSA时创建临时的局部变量，
+/// @param name 变量ID 局部变量时可以为空，目的为了SSA时创建临时的局部变量
+/// @param lineno 变量定义所在的行号，传入 -1 表示无有效行号
 /// @return nullptr则说明变量已存在，否则为新建的变量
-Value * Module::newVarValue(Type * type, std::string name)
+Value * Module::newVarValue(Type * type, const std::string & name, int64_t lineno)
 {
 	Value * retVal;
-	std::string varName;
 
 	// 若变量名有效，检查当前作用域中是否存在变量，如存在则语义错误
 	// 反之，因无效需创建新的变量名，肯定不现在的不同，不需要查找
@@ -482,12 +528,12 @@ Value * Module::newVarValue(Type * type, std::string name)
 		Value * tempValue = scopeStack->findCurrentScope(name);
 		if (tempValue) {
 			// 变量存在，语义错误
-			Status::Error("IR错误[E1400] 未知行 符号检查: 变量(%s)已经存在", name.c_str());
+			report_module_error("E1400", lineno, "符号检查", "变量(%s)已经存在", name.c_str());
 			return nullptr;
 		}
 	} else if (!currentFunc) {
 		// 全局变量要求name不能为空串，必须有效
-		Status::Error("IR错误[E1401] 未知行 符号检查: 全局变量名为空");
+		report_module_error("E1401", lineno, "符号检查", "全局变量名为空");
 		return nullptr;
 	}
 
@@ -507,7 +553,7 @@ Value * Module::newVarValue(Type * type, std::string name)
 		retVal = newGlobalVariable(type, name);
 	}
 
-	// 增加做作用域中
+	// 增加到作用域中
 	scopeStack->insertValue(retVal);
 
 	return retVal;

@@ -247,8 +247,8 @@ bool IRGenerator::ir_function_define(ast_node * node)
 	LocalVariable * retValue = nullptr;
 	if (!type_node->type->isVoidType()) {
 
-		// 保存函数返回值变量到函数信息中，在return语句翻译时需要设置值到这个变量中
-		retValue = static_cast<LocalVariable *>(module->newVarValue(type_node->type));
+		// 保存函数返回值变量到函数信息中，在return语句翻译时需要设置值到这个变量中，该变量无用户源码，因此name可以设置为空，作用域层级设置为-1表示不受作用域管理
+		retValue = static_cast<LocalVariable *>(module->newVarValue(type_node->type, "", -1));
 	}
 	newFunc->setReturnValue(retValue);
 
@@ -307,12 +307,18 @@ bool IRGenerator::ir_function_formal_params(ast_node * node)
 		return false;
 	}
 
-	for (auto * param: currentFunc->getParams()) {
-		Value * localParam = module->newVarValue(param->getType(), param->getName());
+	for (size_t i = 0; i < currentFunc->getParams().size(); ++i) {
+		auto * param = currentFunc->getParams()[i];
+		auto * paramNode = node->sons[i];  // AST 形参节点，与 param 一一对应
+		Value * localParam = module->newVarValue(
+			param->getType(),
+			param->getName(),
+			paramNode != nullptr ? paramNode->line_no : (node != nullptr ? node->line_no : -1)
+		);
 		if (localParam == nullptr) {
 			report_ir_error(
 				"E1112",
-				node != nullptr ? node->line_no : -1,
+				paramNode != nullptr ? paramNode->line_no : (node != nullptr ? node->line_no : -1),
 				"参数检查",
 				"函数(%s)形参(%s)映射到局部变量失败",
 				currentFunc->getName().c_str(),
@@ -672,7 +678,7 @@ bool IRGenerator::ir_variable_declare(ast_node * node)
 
 	// TODO 这里可强化类型等检查
 
-	node->val = module->newVarValue(node->sons[0]->type, node->sons[1]->name);
+	node->val = module->newVarValue(node->sons[0]->type, node->sons[1]->name, node->sons[1]->line_no);
 	if (node->val == nullptr) {
 		return false;
 	}

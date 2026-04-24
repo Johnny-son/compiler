@@ -74,7 +74,8 @@ public:
 
 	// 新建变量型Value，会根据currentFunc的值进行判断创建全局或者局部变量
 	// ! 该函数只有在AST遍历生成线性IR中使用，其它地方不能使用
-	Value * newVarValue(Type * type, std::string name = "");
+	// lineno: 当前变量定义所在的行号，用于错误信息；传入 -1 表示无有效行号
+	Value * newVarValue(Type * type, const std::string & name = "", int64_t lineno = -1);
 
 	// 查找变量（全局变量或局部变量），会根据作用域栈进行逐级查找。
 	/// ! 该函数只有在AST遍历生成线性IR中使用，其它地方不能使用
