@@ -29,6 +29,7 @@ declare -a RUNNER_ARGS=()
 declare -a PLAN_AST_TARGETS=()
 declare -a PLAN_IR_TARGETS=()
 declare -a PLAN_ASM_TARGETS=()
+declare -a PLAN_ERR_TARGETS=()
 
 SUITE_OK_COUNT=0
 SUITE_NG_COUNT=0
@@ -45,8 +46,8 @@ USE_COLOR=0
 show_usage() {
   cat <<'EOF'
 Usage:
-  scripts/run_ci_tests.sh <-ast|-ir|-asm> [--show-failures] [--compiler <path>] <target> [target...]
-  scripts/run_ci_tests.sh [<-ast|-ir|-asm>] --all [--show-failures] [--compiler <path>] [--test-plan <path>]
+  scripts/run_ci_tests.sh <-ast|-ir|-asm|-err> [--show-failures] [--compiler <path>] <target> [target...]
+  scripts/run_ci_tests.sh [<-ast|-ir|-asm|-err>] --all [--show-failures] [--compiler <path>] [--test-plan <path>]
 
 Targets:
   2023_function
@@ -58,6 +59,7 @@ Options:
   -ast                Test AST generation
   -ir                 Test LLVM IR generation, local link, run and diff
   -asm                Test RISCV64 assembly generation and execution
+  -err                Test diagnostic (error) output matching
   --all               Run tests listed in the test plan file
   --test-plan <path>  Override the default test plan file
   --compiler <path>   Override compiler binary path
@@ -68,8 +70,9 @@ Examples:
   scripts/run_ci_tests.sh -ir 2023_function
   scripts/run_ci_tests.sh -ast 2023_func_00_main.c
   scripts/run_ci_tests.sh -asm 2023_func_01_var_defn2.c 2023_func_02_var_defn3.c --show-failures
+  scripts/run_ci_tests.sh -err test/stage1_params/param_redeclare_local.c
   scripts/run_ci_tests.sh --all
-  scripts/run_ci_tests.sh -asm --all --test-plan scripts/ci_test_plan.txt
+  scripts/run_ci_tests.sh --all --compiler ./build/compiler
 EOF
 }
 
@@ -100,11 +103,16 @@ red_text() {
   color_text "31" "$*"
 }
 
+yellow_text() {
+  color_text "33" "$*"
+}
+
 suite_title() {
   case "$1" in
     ast) printf 'ast tests:' ;;
     ir) printf 'ir tests:' ;;
     asm) printf 'asm tests:' ;;
+    err) printf 'err tests:' ;;
     *) printf '%s tests:' "$1" ;;
   esac
 }
@@ -114,6 +122,7 @@ mode_label() {
     ast) printf 'AST\n' ;;
     ir) printf 'IR\n' ;;
     asm) printf 'ASM\n' ;;
+    err) printf 'ERR\n' ;;
     *) printf '%s\n' "$1" ;;
   esac
 }
@@ -128,7 +137,7 @@ trim_line() {
 set_mode() {
   local new_mode="$1"
   if [[ -n "${MODE}" && "${MODE}" != "${new_mode}" ]]; then
-    echo "Only one of -ast, -ir, -asm can be specified." >&2
+    echo "Only one of -ast, -ir, -asm, -err can be specified." >&2
     exit 1
   fi
   MODE="${new_mode}"
@@ -310,6 +319,38 @@ EOF
   exit 1
 }
 
+parse_expected_errors() {
+  local case_file="$1"
+  local line_num=0
+  local line=""
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line_num=$((line_num + 1))
+    if [[ ${line_num} -gt 10 ]]; then
+      break
+    fi
+
+    if [[ "$line" =~ ^[[:space:]]*//[[:space:]]*@expected-error[[:space:]]+E([0-9]{4})[[:space:]]+([^[:space:]]+)[[:space:]]+at[[:space:]]+line[[:space:]]+(-?[0-9]+)[[:space:]]*$ ]]; then
+      printf '%s:%s:%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
+    elif [[ "$line" =~ ^[[:space:]]*/\*[[:space:]]*@expected-error[[:space:]]+E([0-9]{4})[[:space:]]+([^[:space:]]+)[[:space:]]+at[[:space:]]+line[[:space:]]+(-?[0-9]+)[[:space:]]*\*/[[:space:]]*$ ]]; then
+      printf '%s:%s:%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
+    fi
+  done < "${case_file}"
+}
+
+parse_expected_errors_to_array() {
+  local case_file="$1"
+  local -a result=()
+  local -r -a raw_errors=()
+
+  mapfile -t raw_errors < <(parse_expected_errors "${case_file}")
+  for item in "${raw_errors[@]}"; do
+    [[ -n "${item}" ]] && result+=("${item}")
+  done
+
+  echo "${result[@]+"${result[@]}"}"
+}
+
 setup_asm_tools() {
   local default_asm_cc=""
   local default_asm_runner=""
@@ -361,6 +402,7 @@ append_plan_target() {
     ast) PLAN_AST_TARGETS+=("${token}") ;;
     ir) PLAN_IR_TARGETS+=("${token}") ;;
     asm) PLAN_ASM_TARGETS+=("${token}") ;;
+    err) PLAN_ERR_TARGETS+=("${token}") ;;
     *)
       echo "Unknown test plan section: ${section}" >&2
       exit 1
@@ -381,6 +423,7 @@ load_test_plan() {
   PLAN_AST_TARGETS=()
   PLAN_IR_TARGETS=()
   PLAN_ASM_TARGETS=()
+  PLAN_ERR_TARGETS=()
 
   while IFS= read -r raw_line || [[ -n "${raw_line}" ]]; do
     line="$(trim_line "${raw_line}")"
@@ -389,7 +432,7 @@ load_test_plan() {
       continue
     fi
 
-    if [[ "${line}" =~ ^(ast|ir|asm)[[:space:]]*:$ ]]; then
+    if [[ "${line}" =~ ^(ast|ir|asm|err)[[:space:]]*:$ ]]; then
       current_section="${BASH_REMATCH[1]}"
       continue
     fi
@@ -402,10 +445,158 @@ load_test_plan() {
     append_plan_target "${current_section}" "${line}"
   done < "${TEST_PLAN_FILE}"
 
-  if [[ ${#PLAN_AST_TARGETS[@]} -eq 0 && ${#PLAN_IR_TARGETS[@]} -eq 0 && ${#PLAN_ASM_TARGETS[@]} -eq 0 ]]; then
+  if [[ ${#PLAN_AST_TARGETS[@]} -eq 0 && ${#PLAN_IR_TARGETS[@]} -eq 0 && ${#PLAN_ASM_TARGETS[@]} -eq 0 && ${#PLAN_ERR_TARGETS[@]} -eq 0 ]]; then
     echo "No test targets found in plan file: ${TEST_PLAN_FILE}" >&2
     exit 1
   fi
+}
+
+run_err_suite() {
+  local suite_mode="$1"
+  shift
+
+  local compiler_path=""
+  local case_file=""
+  local case_name=""
+  local -a errors=()
+  local -a raw_errors=()
+  local expected_err=""
+  local err_code=""
+  local key_sym=""
+  local err_line=""
+  local -a compiler_cmd=()
+  local stderr_file=""
+  local matched=""
+  local mismatched=""
+  local missing_count=0
+  local extra_count=0
+  local actual_code=""
+  local actual_line=""
+  local actual_key=""
+  local -a actual_errors=()
+  local -a expected_found=()
+  local i=0
+
+  CASES=()
+  FAILED_CASES=()
+  FAILED_REASONS=()
+  SUITE_OK_COUNT=0
+  SUITE_NG_COUNT=0
+
+  if [[ $# -eq 0 ]]; then
+    echo "No targets specified for $(mode_label "${suite_mode}")." >&2
+    exit 1
+  fi
+
+  compiler_path="$(resolve_compiler_for_mode "${suite_mode}")"
+
+  for case_file in "$@"; do
+    resolve_case_token "${case_file}"
+  done
+
+  if [[ ${#CASES[@]} -eq 0 ]]; then
+    echo "No test cases resolved for $(mode_label "${suite_mode}")." >&2
+    exit 1
+  fi
+
+  local workdir
+  workdir="$(mktemp -d "${WORK_ROOT}/${suite_mode}.XXXXXX")"
+
+  for case_file in "${CASES[@]}"; do
+    case_name="$(basename "${case_file}" .c)"
+
+    mapfile -t raw_errors < <(parse_expected_errors "${case_file}")
+    errors=()
+    for item in "${raw_errors[@]}"; do
+      [[ -n "${item}" ]] && errors+=("${item}")
+    done
+
+    if [[ ${#errors[@]} -eq 0 ]]; then
+      print_case_failure "${case_name}" "missing @expected-error tag"
+      record_failure "${case_name}" "missing @expected-error tag"
+      SUITE_NG_COUNT=$((SUITE_NG_COUNT + 1))
+      continue
+    fi
+
+    if [[ ${QUIET_ALL_SUCCESS} -eq 0 ]]; then
+      echo "Running ${case_name} (${suite_mode})"
+    fi
+
+    stderr_file="${workdir}/${case_name}.stderr"
+    compiler_cmd=("${compiler_path}" -S -L -o /dev/null "${case_file}")
+
+    set +e
+    "${compiler_cmd[@]}" 2>"${stderr_file}" >/dev/null
+    local exit_code=$?
+    set -e
+
+    if [[ ${exit_code} -eq 0 ]]; then
+      print_case_failure "${case_name}" "expected compile to fail"
+      record_failure "${case_name}" "expected compile to fail"
+      SUITE_NG_COUNT=$((SUITE_NG_COUNT + 1))
+      continue
+    fi
+
+    matched=0
+    mismatched=0
+    missing_count=0
+    extra_count=0
+    expected_found=()
+    for ((i = 0; i < ${#errors[@]}; i++)); do
+      expected_found[i]=0
+    done
+
+    actual_errors=()
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+      if [[ "${line}" =~ IR错误\[E([0-9]{4})\][[:space:]]+(第([0-9]+)行|未知行)[[:space:]]+[^:]+:[[:space:]]+(.+) ]]; then
+        actual_code="${BASH_REMATCH[1]}"
+        if [[ "${BASH_REMATCH[2]}" == 第*行 ]]; then
+          actual_line="${BASH_REMATCH[3]}"
+        else
+          actual_line="-1"
+        fi
+        actual_key="${BASH_REMATCH[4]}"
+        actual_errors+=("${actual_code}:${actual_key}:${actual_line}")
+      fi
+    done < "${stderr_file}"
+
+    for expected_err in "${errors[@]}"; do
+      IFS=':' read -r err_code key_sym err_line <<< "${expected_err}"
+
+      local match_found=0
+      for actual_err in "${actual_errors[@]}"; do
+        IFS=':' read -r a_code a_key a_line <<< "${actual_err}"
+
+        if [[ "${a_code}" == "${err_code}" ]]; then
+          if [[ "${a_key}" == *"${key_sym}"* ]] || [[ "${a_key}" == "${key_sym}" ]]; then
+            if [[ "${err_line}" == "-1" ]] || [[ "${a_line}" == "${err_line}" ]]; then
+              match_found=1
+              matched=$((matched + 1))
+              break
+            fi
+          fi
+        fi
+      done
+
+      if [[ ${match_found} -eq 0 ]]; then
+        mismatched=$((mismatched + 1))
+        missing_count=$((missing_count + 1))
+      fi
+    done
+
+    extra_count=0
+    if [[ ${#actual_errors[@]} -gt ${#errors[@]} ]]; then
+      extra_count=$((${#actual_errors[@]} - ${#errors[@]}))
+    fi
+
+    if [[ ${mismatched} -eq 0 && ${extra_count} -eq 0 ]]; then
+      SUITE_OK_COUNT=$((SUITE_OK_COUNT + 1))
+    else
+      print_case_failure "${case_name}" "error mismatch"
+      record_failure "${case_name}" "error mismatch (E${err_code} ${key_sym} at line ${err_line})"
+      SUITE_NG_COUNT=$((SUITE_NG_COUNT + 1))
+    fi
+  done
 }
 
 run_mode_suite() {
@@ -605,6 +796,7 @@ run_plan_section() {
     ast) suite_targets=("${PLAN_AST_TARGETS[@]}") ;;
     ir) suite_targets=("${PLAN_IR_TARGETS[@]}") ;;
     asm) suite_targets=("${PLAN_ASM_TARGETS[@]}") ;;
+    err) suite_targets=("${PLAN_ERR_TARGETS[@]}") ;;
   esac
 
   printf '%s\n' "$(suite_title "${suite_mode}")"
@@ -618,7 +810,11 @@ run_plan_section() {
     return
   fi
 
-  run_mode_suite "${suite_mode}" "${suite_targets[@]}"
+  if [[ "${suite_mode}" == "err" ]]; then
+    run_err_suite "${suite_mode}" "${suite_targets[@]}"
+  else
+    run_mode_suite "${suite_mode}" "${suite_targets[@]}"
+  fi
 
   if [[ ${SUITE_NG_COUNT} -eq 0 ]]; then
     printf '%s\n' "$(green_text "all passed")"
@@ -653,6 +849,9 @@ while [[ $# -gt 0 ]]; do
       ;;
     -asm)
       set_mode asm
+      ;;
+    -err)
+      set_mode err
       ;;
     --all)
       RUN_ALL=1
@@ -700,8 +899,6 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -n "${MINIC_EXTRA_ARGS}" ]]; then
-  # Intentionally split shell words so callers can pass multiple flags.
-  # shellcheck disable=SC2206
   EXTRA_ARGS=(${MINIC_EXTRA_ARGS})
 fi
 
@@ -712,7 +909,7 @@ fi
 
 if [[ ${RUN_ALL} -eq 0 ]]; then
   if [[ -z "${MODE}" ]]; then
-    echo "You must specify one of -ast, -ir, -asm." >&2
+    echo "You must specify one of -ast, -ir, -asm, -err." >&2
     exit 1
   fi
 
@@ -739,6 +936,7 @@ if [[ ${RUN_ALL} -eq 1 ]]; then
     run_plan_section ast
     run_plan_section ir
     run_plan_section asm
+    run_plan_section err
   fi
 
   if [[ ${TOTAL_NG_COUNT} -ne 0 ]]; then
@@ -748,7 +946,11 @@ if [[ ${RUN_ALL} -eq 1 ]]; then
   exit 0
 fi
 
-run_mode_suite "${MODE}" "${TARGET_SPECS[@]}"
+if [[ "${MODE}" == "err" ]]; then
+  run_err_suite "${MODE}" "${TARGET_SPECS[@]}"
+else
+  run_mode_suite "${MODE}" "${TARGET_SPECS[@]}"
+fi
 
 echo "OK number=${SUITE_OK_COUNT}, NG number=${SUITE_NG_COUNT}"
 

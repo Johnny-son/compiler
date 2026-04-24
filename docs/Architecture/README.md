@@ -16,3 +16,8 @@
 - [Frontend 二层超细化版](./frontend/Frontend二层超细化版.md)
 - [IR 二层超细化版](./ir/IR二层超细化版.md)
 - [Backend 二层超细化版](./backend/Backend二层超细化版.md)
+
+## 专项文档
+
+- [诊断测试框架](./diagnostics/诊断测试框架.md)
+- [错误码表](./diagnostics/错误码表.md)

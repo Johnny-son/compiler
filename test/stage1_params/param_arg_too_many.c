@@ -1,3 +1,4 @@
+// @expected-error E1201 id at line 9
 int id(int x)
 {
     return x;

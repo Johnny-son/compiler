@@ -1,3 +1,4 @@
+// @expected-error E1102 foo at line 7
 int foo(int a)
 {
     return a;
