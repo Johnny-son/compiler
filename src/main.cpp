@@ -212,7 +212,7 @@ static int compile(string inputFile, string outputFile)
 		ir_generator = new IRGenerator(astRoot, module);
 		
 		if (!ir_generator->run()) {
-			Status::Error( "中间IR生成错误");
+			Status::Error("编译终止: IR 生成失败（详见上方错误）");
 			break;
 		}
 

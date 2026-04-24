@@ -6,6 +6,12 @@
 - 修改建议
 - 常见坑位
 
+统一错误风格约定（2026-04）：
+
+- 模板：`IR错误[Exxxx] 第N行 类别: 详细原因`
+- 行号缺失：`IR错误[Exxxx] 未知行 类别: 详细原因`
+- 错误码分段：`E10xx` 节点分发、`E11xx` 函数/形参、`E12xx` 调用参数、`E13xx` 声明初始化、`E14xx` 模块符号、`E15xx` 调用约定
+
 ---
 
 ## A. `src/ir/include` 头文件层
@@ -438,6 +444,7 @@ IRGenerator
 - 作用域栈全局层必须先 `enterScope`，否则全局变量插入失败。
 - `newVarValue` 在全局场景要求 name 非空，匿名全局会报错。
 - 输出 LLVM 文本时 label 命名 sanitize 规则改动会影响分支目标一致性。
+- 变量重名/全局变量空名错误现已统一到 `E1400/E1401`，排查时优先按错误码定位入口。
 
 ### 20. `src/ir/IRGenerator.cpp`
 
@@ -468,6 +475,13 @@ IRGenerator::run
 - 可引入统一错误上报对象，把 TODO 处语义错误补齐。
 - 大表达式翻译可抽共用 `translateBinaryOp` 减少重复代码。
 - `eval_global_const_expr` 可独立成 utility，便于测试。
+
+错误码覆盖（当前实现）：
+
+- `E1000`：不支持的 AST 节点类型
+- `E1100-E1112`：函数定义与形参翻译阶段错误
+- `E1200-E1202`：函数调用语义检查（未定义、参数个数、参数类型）
+- `E1301-E1302`：全局变量初始化错误
 
 常见坑位：
 
@@ -765,6 +779,7 @@ toString
 常见坑位：
 
 - `toString` 内重置 arg 计数属于副作用行为，调试/多次输出时要注意。
+- `toString` 内的 ARG 数量一致性检查若触发，会输出 `E1500`，应同时检查 ArgInstruction 生成路径。
 
 ### 35. `src/ir/Instructions/ArgInstruction.h`
 

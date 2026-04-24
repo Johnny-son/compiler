@@ -482,12 +482,12 @@ Value * Module::newVarValue(Type * type, std::string name)
 		Value * tempValue = scopeStack->findCurrentScope(name);
 		if (tempValue) {
 			// 变量存在，语义错误
-			Status::Error("变量(%s)已经存在", name.c_str());
+			Status::Error("IR错误[E1400] 未知行 符号检查: 变量(%s)已经存在", name.c_str());
 			return nullptr;
 		}
 	} else if (!currentFunc) {
 		// 全局变量要求name不能为空串，必须有效
-		Status::Error("变量名为空");
+		Status::Error("IR错误[E1401] 未知行 符号检查: 全局变量名为空");
 		return nullptr;
 	}
 

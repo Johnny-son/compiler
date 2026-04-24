@@ -43,7 +43,7 @@ void FuncCallInstruction::toString(std::string & str)
 	if (operandsNum != argCount) {
 		// 两者不一致 也可能没有ARG指令，正常
 		if (argCount != 0) {
-			(void) Status::Error("ARG指令的个数与调用函数个数不一致");
+			(void) Status::Error("IR错误[E1500] 未知行 调用约定检查: ARG指令个数与函数调用参数个数不一致");
 		}
 	}
 

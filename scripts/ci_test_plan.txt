@@ -88,3 +88,29 @@ test/stage1_params/param_multi.c
 test/stage1_params/param_assign.c
 test/stage1_params/param_nested.c
 test/stage1_params/param_stack10.c
+
+# diagnostics (stderr format checks, not for successful build stages):
+# 1) test/stage1_params/param_arg_too_many.c
+#    expected stderr contains:
+#    - "IR错误[E1201]"
+#    - "参数检查: 函数(" and "调用参数个数不匹配"
+#    - "编译终止: IR 生成失败（详见上方错误）"
+# 2) test/stage1_params/param_arg_too_few.c
+#    expected stderr contains:
+#    - "IR错误[E1201]"
+#    - "期望" and "实际"
+# 3) test/stage1_params/param_undef_var.c
+#    expected stderr contains:
+#    - "IR错误[E1010]"
+# 4) test/stage1_params/param_func_redef.c
+#    expected stderr contains:
+#    - "IR错误[E1102]"
+# 5) test/stage1_params/param_call_undef.c
+#    expected stderr contains:
+#    - "IR错误[E1200]"
+# 6) test/stage1_params/param_global_init_nonconst.c
+#    expected stderr contains:
+#    - "IR错误[E1301]"
+# 7) test/stage1_params/param_redeclare_local.c
+#    expected stderr contains:
+#    - "IR错误[E1400]"

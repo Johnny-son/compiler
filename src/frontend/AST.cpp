@@ -11,7 +11,7 @@
 /// @param _node_type 节点类型
 /// @param _line_no 行号
 ast_node::ast_node(ast_operator_type _node_type, Type * _type, int64_t _line_no)
-	: node_type(_node_type), line_no(-1), type(_type)
+	: node_type(_node_type), line_no(_line_no), type(_type)
 {}
 
 /// @brief 构造函数
@@ -228,14 +228,15 @@ ast_node * ast_node::create_type_node(type_attr & attr)
 /// @return 创建的节点
 ast_node * ast_node::create_func_call(ast_node * funcname_node, ast_node * params_node)
 {
-	ast_node * node = new ast_node(ast_operator_type::AST_OP_FUNC_CALL);
+	const int64_t lineno = funcname_node != nullptr ? funcname_node->line_no : -1;
+	ast_node * node = new ast_node(ast_operator_type::AST_OP_FUNC_CALL, VoidType::getType(), lineno);
 
 	// 设置调用函数名
 	node->name = funcname_node->name;
 
 	// 如果没有参数，则创建参数节点
 	if (!params_node) {
-		params_node = new ast_node(ast_operator_type::AST_OP_FUNC_REAL_PARAMS);
+		params_node = new ast_node(ast_operator_type::AST_OP_FUNC_REAL_PARAMS, VoidType::getType(), lineno);
 	}
 
 	(void) node->insert_son_node(funcname_node);

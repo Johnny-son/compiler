@@ -1,4 +1,7 @@
+#include <cstdarg>
 #include <cstdio>
+#include <string>
+#include <vector>
 
 #include "IRGenerator.h"
 #include "ir/include/Function.h"
@@ -16,6 +19,53 @@
 #include "ir/Values/FormalParam.h"
 #include "ir/Values/LocalVariable.h"
 #include "utils/Status.h"
+
+namespace {
+
+std::string ir_format_detail(const char * format, va_list args)
+{
+	if (format == nullptr) {
+		return "";
+	}
+
+	va_list args_copy;
+	va_copy(args_copy, args);
+	const int message_size = std::vsnprintf(nullptr, 0, format, args_copy);
+	va_end(args_copy);
+
+	if (message_size < 0) {
+		return format;
+	}
+
+	std::vector<char> buffer(static_cast<std::size_t>(message_size) + 1);
+	std::vsnprintf(buffer.data(), buffer.size(), format, args);
+	return std::string(buffer.data(), static_cast<std::size_t>(message_size));
+}
+
+void report_ir_error(const char * error_code, int64_t lineno, const char * category, const char * detail_format, ...)
+{
+	va_list args;
+	va_start(args, detail_format);
+	std::string detail = ir_format_detail(detail_format, args);
+	va_end(args);
+
+	if (lineno > 0) {
+		Status::Error(
+			"IR错误[%s] 第%lld行 %s: %s",
+			error_code,
+			(long long) lineno,
+			category != nullptr ? category : "未知类别",
+			detail.c_str());
+	} else {
+		Status::Error(
+			"IR错误[%s] 未知行 %s: %s",
+			error_code,
+			category != nullptr ? category : "未知类别",
+			detail.c_str());
+	}
+}
+
+} // namespace
 
 // 构造函数
 IRGenerator::IRGenerator(ast_node * _root, Module * _module) : root(_root), module(_module)
@@ -95,9 +145,9 @@ ast_node * IRGenerator::ir_visit_ast_node(ast_node * node)
 // 未知节点类型的节点处理
 bool IRGenerator::ir_default(ast_node * node)
 {
-	// 未知的节点
-	printf("Unkown node(%d)\n", (int) node->node_type);
-	return true;
+	// 未知节点视为IR阶段错误，避免静默吞掉不支持语法
+	report_ir_error("E1000", node != nullptr ? node->line_no : -1, "节点分发", "不支持的AST节点类型(%d)", (int) node->node_type);
+	return false;
 }
 
 // 编译单元AST节点翻译成线性中间IR
@@ -110,7 +160,6 @@ bool IRGenerator::ir_compile_unit(ast_node * node)
 		// 遍历编译单元，要么是函数定义，要么是语句
 		ast_node * son_node = ir_visit_ast_node(son);
 		if (!son_node) {
-			// TODO 自行追加语义错误处理
 			return false;
 		}
 	}
@@ -125,8 +174,7 @@ bool IRGenerator::ir_function_define(ast_node * node)
 
 	// 创建一个函数，用于当前函数处理
 	if (module->getCurrentFunction()) {
-		// 函数中嵌套定义函数，这是不允许的，错误退出
-		// TODO 自行追加语义错误处理
+		report_ir_error("E1100", node != nullptr ? node->line_no : -1, "语义检查", "函数定义不允许嵌套");
 		return false;
 	}
 
@@ -144,7 +192,12 @@ bool IRGenerator::ir_function_define(ast_node * node)
 	formalParams.reserve(param_node->sons.size());
 	for (auto * param: param_node->sons) {
 		if (param == nullptr || param->node_type != ast_operator_type::AST_OP_FUNC_FORMAL_PARAM) {
-			Status::Error("函数(%s)形参节点非法", name_node->name.c_str());
+			report_ir_error(
+				"E1101",
+				name_node != nullptr ? name_node->line_no : -1,
+				"参数检查",
+				"函数(%s)形参节点非法",
+				name_node->name.c_str());
 			return false;
 		}
 
@@ -154,8 +207,12 @@ bool IRGenerator::ir_function_define(ast_node * node)
 	// 创建一个新的函数定义
 	Function * newFunc = module->newFunction(name_node->name, type_node->type, formalParams);
 	if (!newFunc) {
-		// 新定义的函数已经存在，则失败返回。
-		// TODO 自行追加语义错误处理
+		report_ir_error(
+			"E1102",
+			name_node != nullptr ? name_node->line_no : -1,
+			"符号检查",
+			"函数(%s)重复定义或符号冲突",
+			name_node->name.c_str());
 		return false;
 	}
 
@@ -182,8 +239,6 @@ bool IRGenerator::ir_function_define(ast_node * node)
 	// 遍历形参，没有IR指令，不需要追加
 	result = ir_function_formal_params(param_node);
 	if (!result) {
-		// 形参解析失败
-		// TODO 自行追加语义错误处理
 		return false;
 	}
 	node->blockInsts.addInst(param_node->blockInsts);
@@ -205,8 +260,6 @@ bool IRGenerator::ir_function_define(ast_node * node)
 	// 遍历block
 	result = ir_block(block_node);
 	if (!result) {
-		// block解析失败
-		// TODO 自行追加语义错误处理
 		return false;
 	}
 
@@ -238,17 +291,32 @@ bool IRGenerator::ir_function_formal_params(ast_node * node)
 {
 	Function * currentFunc = module->getCurrentFunction();
 	if (currentFunc == nullptr) {
+		report_ir_error("E1110", node != nullptr ? node->line_no : -1, "参数检查", "当前函数上下文为空，无法翻译形参");
 		return false;
 	}
 
 	if (node->sons.size() != currentFunc->getParams().size()) {
-		Status::Error("函数(%s)形参数量不一致", currentFunc->getName().c_str());
+		report_ir_error(
+			"E1111",
+			node != nullptr ? node->line_no : -1,
+			"参数检查",
+			"函数(%s)形参数量不一致，期望%zu个，实际%zu个",
+			currentFunc->getName().c_str(),
+			currentFunc->getParams().size(),
+			node->sons.size());
 		return false;
 	}
 
 	for (auto * param: currentFunc->getParams()) {
 		Value * localParam = module->newVarValue(param->getType(), param->getName());
 		if (localParam == nullptr) {
+			report_ir_error(
+				"E1112",
+				node != nullptr ? node->line_no : -1,
+				"参数检查",
+				"函数(%s)形参(%s)映射到局部变量失败",
+				currentFunc->getName().c_str(),
+				param->getName().c_str());
 			return false;
 		}
 
@@ -299,8 +367,6 @@ bool IRGenerator::ir_return(ast_node * node)
 		// 返回的表达式的指令保存在right节点中
 		right = ir_visit_ast_node(son_node);
 		if (!right) {
-
-			// 某个变量没有定值
 			return false;
 		}
 	}
@@ -359,6 +425,15 @@ bool IRGenerator::ir_leaf_node_var_id(ast_node * node)
 	// 变量，则需要在符号表中查找对应的值
 
 	val = module->findVarValue(node->name);
+	if (val == nullptr) {
+		report_ir_error(
+			"E1010",
+			node != nullptr ? node->line_no : -1,
+			"符号检查",
+			"标识符(%s)未定义",
+			node != nullptr ? node->name.c_str() : "<null>");
+		return false;
+	}
 
 	node->val = val;
 
@@ -376,14 +451,12 @@ bool IRGenerator::ir_add(ast_node * node)
 	// 加法的左边操作数
 	ast_node * left = ir_visit_ast_node(src1_node);
 	if (!left) {
-		// 某个变量没有定值
 		return false;
 	}
 
 	// 加法的右边操作数
 	ast_node * right = ir_visit_ast_node(src2_node);
 	if (!right) {
-		// 某个变量没有定值
 		return false;
 	}
 
@@ -417,14 +490,12 @@ bool IRGenerator::ir_sub(ast_node * node)
 	// 加法的左边操作数
 	ast_node * left = ir_visit_ast_node(src1_node);
 	if (!left) {
-		// 某个变量没有定值
 		return false;
 	}
 
 	// 加法的右边操作数
 	ast_node * right = ir_visit_ast_node(src2_node);
 	if (!right) {
-		// 某个变量没有定值
 		return false;
 	}
 
@@ -551,15 +622,12 @@ bool IRGenerator::ir_assign(ast_node * node)
 	// 赋值运算符的左侧操作数
 	ast_node * left = ir_visit_ast_node(son1_node);
 	if (!left) {
-		// 某个变量没有定值
-		// 这里缺省设置变量不存在则创建，因此这里不会错误
 		return false;
 	}
 
 	// 赋值运算符的右侧操作数
 	ast_node * right = ir_visit_ast_node(son2_node);
 	if (!right) {
-		// 某个变量没有定值
 		return false;
 	}
 
@@ -618,13 +686,23 @@ bool IRGenerator::ir_variable_declare(ast_node * node)
 	if (module->getCurrentFunction() == nullptr) {
 		int32_t init_value = 0;
 		if (!eval_global_const_expr(init_expr, init_value)) {
-			Status::Error("全局变量(%s)初始化目前只支持常量整数表达式", node->sons[1]->name.c_str());
+			report_ir_error(
+				"E1301",
+				node->sons[1] != nullptr ? node->sons[1]->line_no : -1,
+				"全局初始化",
+				"全局变量(%s)初始化目前只支持常量整数表达式",
+				node->sons[1]->name.c_str());
 			return false;
 		}
 
 		auto * global_var = dynamic_cast<GlobalVariable *>(node->val);
 		if (global_var == nullptr) {
-			Status::Error("全局变量(%s)初始化失败", node->sons[1]->name.c_str());
+			report_ir_error(
+				"E1302",
+				node->sons[1] != nullptr ? node->sons[1]->line_no : -1,
+				"全局初始化",
+				"全局变量(%s)初始化失败",
+				node->sons[1]->name.c_str());
 			return false;
 		}
 
@@ -722,7 +800,7 @@ bool IRGenerator::ir_function_call(ast_node * node)
 	// 这里约定函数必须先定义后使用
 	auto calledFunction = module->findFunction(funcName);
 	if (nullptr == calledFunction) {
-		Status::Error("函数(%s)未定义或声明", funcName.c_str());
+		report_ir_error("E1200", lineno, "语义检查", "函数(%s)未定义或未声明", funcName.c_str());
 		return false;
 	}
 
@@ -731,9 +809,11 @@ bool IRGenerator::ir_function_call(ast_node * node)
 
 	auto & formalParams = calledFunction->getParams();
 	if (paramsNode->sons.size() != formalParams.size()) {
-		Status::Error(
-			"第%lld行的函数(%s)调用参数个数不匹配，期望%zu个，实际%zu个",
-			(long long) lineno,
+		report_ir_error(
+			"E1201",
+			lineno,
+			"参数检查",
+			"函数(%s)调用参数个数不匹配，期望%zu个，实际%zu个",
 			funcName.c_str(),
 			formalParams.size(),
 			paramsNode->sons.size());
@@ -765,9 +845,11 @@ bool IRGenerator::ir_function_call(ast_node * node)
 			Type * realType = temp->val != nullptr ? temp->val->getType() : nullptr;
 			Type * formalType = formalParams[index]->getType();
 			if (realType == nullptr || formalType == nullptr || realType->getTypeID() != formalType->getTypeID()) {
-				Status::Error(
-					"第%lld行的函数(%s)第%zu个参数类型不匹配，期望%s，实际%s",
-					(long long) lineno,
+				report_ir_error(
+					"E1202",
+					lineno,
+					"参数检查",
+					"函数(%s)第%zu个参数类型不匹配，期望%s，实际%s",
 					funcName.c_str(),
 					index + 1,
 					formalType != nullptr ? formalType->toString().c_str() : "<null>",

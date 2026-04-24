@@ -2,6 +2,7 @@
 
 #include <cstdarg>
 #include <cstdio>
+#include <iostream>
 #include <utility>
 #include <vector>
 
@@ -32,7 +33,12 @@ std::string format_message(const char *format, va_list args)
 namespace compiler {
 
 Status::Status(bool ok, std::string message) : ok_(ok), message_(std::move(message))
-{}
+{
+    // 如果是错误状态且消息不为空，直接输出到 stderr
+    if (!ok_ && !message_.empty()) {
+        std::cerr << message_ << std::endl;
+    }
+}
 
 Status Status::Ok()
 {
