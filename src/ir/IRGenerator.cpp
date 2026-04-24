@@ -13,6 +13,7 @@
 #include "ir/Instructions/MoveInstruction.h"
 #include "ir/Types/IntegerType.h"
 #include "ir/Values/ConstInt.h"
+#include "ir/Values/FormalParam.h"
 #include "ir/Values/LocalVariable.h"
 #include "utils/Status.h"
 
@@ -139,8 +140,19 @@ bool IRGenerator::ir_function_define(ast_node * node)
 	ast_node * param_node = node->sons[2];
 	ast_node * block_node = node->sons[3];
 
+	std::vector<FormalParam *> formalParams;
+	formalParams.reserve(param_node->sons.size());
+	for (auto * param: param_node->sons) {
+		if (param == nullptr || param->node_type != ast_operator_type::AST_OP_FUNC_FORMAL_PARAM) {
+			Status::Error("函数(%s)形参节点非法", name_node->name.c_str());
+			return false;
+		}
+
+		formalParams.push_back(new FormalParam(param->type, param->name));
+	}
+
 	// 创建一个新的函数定义
-	Function * newFunc = module->newFunction(name_node->name, type_node->type);
+	Function * newFunc = module->newFunction(name_node->name, type_node->type, formalParams);
 	if (!newFunc) {
 		// 新定义的函数已经存在，则失败返回。
 		// TODO 自行追加语义错误处理
@@ -224,12 +236,24 @@ bool IRGenerator::ir_function_define(ast_node * node)
 // 形式参数AST节点翻译成线性中间IR
 bool IRGenerator::ir_function_formal_params(ast_node * node)
 {
-	// TODO 目前形参还不支持，直接返回true
+	Function * currentFunc = module->getCurrentFunction();
+	if (currentFunc == nullptr) {
+		return false;
+	}
 
-	// 每个形参变量都创建对应的临时变量，用于表达实参转递的值
-	// 而真实的形参则创建函数内的局部变量。
-	// 然后产生赋值指令，用于把表达实参值的临时变量拷贝到形参局部变量上。
-	// 请注意这些指令要放在Entry指令后面，因此处理的先后上要注意。
+	if (node->sons.size() != currentFunc->getParams().size()) {
+		Status::Error("函数(%s)形参数量不一致", currentFunc->getName().c_str());
+		return false;
+	}
+
+	for (auto * param: currentFunc->getParams()) {
+		Value * localParam = module->newVarValue(param->getType(), param->getName());
+		if (localParam == nullptr) {
+			return false;
+		}
+
+		node->blockInsts.addInst(new MoveInstruction(currentFunc, localParam, param));
+	}
 
 	return true;
 }
@@ -705,6 +729,17 @@ bool IRGenerator::ir_function_call(ast_node * node)
 	// 当前函数存在函数调用
 	currentFunc->setExistFuncCall(true);
 
+	auto & formalParams = calledFunction->getParams();
+	if (paramsNode->sons.size() != formalParams.size()) {
+		Status::Error(
+			"第%lld行的函数(%s)调用参数个数不匹配，期望%zu个，实际%zu个",
+			(long long) lineno,
+			funcName.c_str(),
+			formalParams.size(),
+			paramsNode->sons.size());
+		return false;
+	}
+
 	// 如果没有孩子，也认为是没有参数
 	if (!paramsNode->sons.empty()) {
 
@@ -718,7 +753,8 @@ bool IRGenerator::ir_function_call(ast_node * node)
 
 		// 遍历参数列表，孩子是表达式
 		// 这里自左往右计算表达式
-		for (auto son: paramsNode->sons) {
+		for (size_t index = 0; index < paramsNode->sons.size(); ++index) {
+			auto son = paramsNode->sons[index];
 
 			// 遍历Block的每个语句，进行显示或者运算
 			ast_node * temp = ir_visit_ast_node(son);
@@ -726,16 +762,22 @@ bool IRGenerator::ir_function_call(ast_node * node)
 				return false;
 			}
 
+			Type * realType = temp->val != nullptr ? temp->val->getType() : nullptr;
+			Type * formalType = formalParams[index]->getType();
+			if (realType == nullptr || formalType == nullptr || realType->getTypeID() != formalType->getTypeID()) {
+				Status::Error(
+					"第%lld行的函数(%s)第%zu个参数类型不匹配，期望%s，实际%s",
+					(long long) lineno,
+					funcName.c_str(),
+					index + 1,
+					formalType != nullptr ? formalType->toString().c_str() : "<null>",
+					realType != nullptr ? realType->toString().c_str() : "<null>");
+				return false;
+			}
+
 			realParams.push_back(temp->val);
 			node->blockInsts.addInst(temp->blockInsts);
 		}
-	}
-
-	// TODO 这里请追加函数调用的语义错误检查，这里只进行了函数参数的个数检查等，其它请自行追加。
-	if (realParams.size() != calledFunction->getParams().size()) {
-		// 函数参数的个数不一致，语义错误
-		Status::Error("第%lld行的被调用函数(%s)未定义或声明", (long long) lineno, funcName.c_str());
-		return false;
 	}
 
 	// 返回调用有返回值，则需要分配临时变量，用于保存函数调用的返回值

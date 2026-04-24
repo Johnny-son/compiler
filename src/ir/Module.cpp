@@ -251,6 +251,12 @@ void emitLLVMFunctionDefinition(FILE * fp, Function * func)
 
 			case IRInstOperator::IRINST_OP_FUNC_CALL: {
 				auto * callInst = static_cast<FuncCallInstruction *>(inst);
+				std::vector<std::string> argValues;
+				argValues.reserve(inst->getOperandsNum());
+				for (int32_t idx = 0; idx < inst->getOperandsNum(); ++idx) {
+					argValues.push_back(emitLLVMRValue(inst->getOperand(idx), state));
+				}
+
 				if (inst->getType()->isVoidType()) {
 					fprintf(
 						fp,
@@ -272,8 +278,7 @@ void emitLLVMFunctionDefinition(FILE * fp, Function * func)
 					}
 
 					Value * arg = inst->getOperand(idx);
-					std::string argValue = emitLLVMRValue(arg, state);
-					fprintf(fp, "%s %s", arg->getType()->toString().c_str(), argValue.c_str());
+					fprintf(fp, "%s %s", arg->getType()->toString().c_str(), argValues[idx].c_str());
 				}
 
 				fputs(")\n", fp);
@@ -364,7 +369,8 @@ Function * Module::newFunction(std::string name, Type * returnType, std::vector<
 	}
 
 	// 根据形参创建形参类型清单
-	std::vector<Type *> paramsType(params.size());
+	std::vector<Type *> paramsType;
+	paramsType.reserve(params.size());
 
 	for (auto & param: params) {
 		paramsType.push_back(param->getType());

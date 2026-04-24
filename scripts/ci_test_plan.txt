@@ -15,7 +15,7 @@ ast:
 # 2023_func_06_const_var_defn2.c
 # 2023_func_07_const_var_defn3.c
 # 2023_func_08_const_array_defn.c
-# 2023_func_09_func_defn.c
+2023_func_09_func_defn.c
 2023_func_10_var_defn_func.c
 2023_func_11_add2.c
 # 2023_func_12_addc.c
@@ -27,6 +27,11 @@ ast:
 # 2023_func_18_divc.c
 2023_func_19_mod.c
 2023_func_20_rem.c
+test/stage1_params/param_basic.c
+test/stage1_params/param_multi.c
+test/stage1_params/param_assign.c
+test/stage1_params/param_nested.c
+test/stage1_params/param_stack10.c
 
 ir:
 2023_func_00_main.c
@@ -38,7 +43,7 @@ ir:
 # 2023_func_06_const_var_defn2.c
 # 2023_func_07_const_var_defn3.c
 # 2023_func_08_const_array_defn.c
-# 2023_func_09_func_defn.c
+2023_func_09_func_defn.c
 2023_func_10_var_defn_func.c
 2023_func_11_add2.c
 # 2023_func_12_addc.c
@@ -50,6 +55,11 @@ ir:
 # 2023_func_18_divc.c
 2023_func_19_mod.c
 2023_func_20_rem.c
+test/stage1_params/param_basic.c
+test/stage1_params/param_multi.c
+test/stage1_params/param_assign.c
+test/stage1_params/param_nested.c
+test/stage1_params/param_stack10.c
 
 asm:
 2023_func_00_main.c
@@ -61,7 +71,7 @@ asm:
 # 2023_func_06_const_var_defn2.c
 # 2023_func_07_const_var_defn3.c
 # 2023_func_08_const_array_defn.c
-# 2023_func_09_func_defn.c
+2023_func_09_func_defn.c
 2023_func_10_var_defn_func.c
 2023_func_11_add2.c
 # 2023_func_12_addc.c
@@ -73,3 +83,8 @@ asm:
 # 2023_func_18_divc.c
 2023_func_19_mod.c
 2023_func_20_rem.c
+test/stage1_params/param_basic.c
+test/stage1_params/param_multi.c
+test/stage1_params/param_assign.c
+test/stage1_params/param_nested.c
+test/stage1_params/param_stack10.c

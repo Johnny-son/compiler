@@ -93,6 +93,13 @@ void InstructionSelector::translateEntry()
 	for (int index = 0; index < maxParamRegs; ++index) {
 		storeValue(REG_A[index], params[index]);
 	}
+
+	for (std::size_t index = FunctionFrameLayout::argRegCount; index < params.size(); ++index) {
+		const int64_t callerArgOffset =
+			static_cast<int64_t>((index - FunctionFrameLayout::argRegCount) * FunctionFrameLayout::stackSlotSize);
+		asmFunction.emitOp(loadOpcode(params[index].type()), {AsmOperand::reg(REG_T0), AsmOperand::mem(REG_FP, callerArgOffset)});
+		storeValue(REG_T0, params[index]);
+	}
 }
 
 void InstructionSelector::translateExit(const IRInstView & inst)

@@ -46,6 +46,9 @@ string getNodeName(ast_node * astnode)
 		case ast_operator_type::AST_OP_FUNC_FORMAL_PARAMS:
 			nodeName = "formal-params";
 			break;
+		case ast_operator_type::AST_OP_FUNC_FORMAL_PARAM:
+			nodeName = "formal-param:" + astnode->name;
+			break;
 		case ast_operator_type::AST_OP_VAR_DECL:
 			nodeName = "var-decl";
 			break;

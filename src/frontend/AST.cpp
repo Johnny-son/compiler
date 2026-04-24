@@ -190,6 +190,17 @@ ast_node * ast_node::create_func_def(type_attr & type, var_id_attr & id, ast_nod
 	return create_func_def(type_node, id_node, block_node, params_node);
 }
 
+/// @brief 创建函数形式参数的节点
+/// @param line_no 行号
+/// @param param_name 形式参数名
+/// @return 创建的节点
+ast_node * ast_node::create_func_formal_param(uint32_t line_no, const char * param_name)
+{
+	ast_node * node = new ast_node(ast_operator_type::AST_OP_FUNC_FORMAL_PARAM, IntegerType::getTypeInt(), line_no);
+	node->name = param_name != nullptr ? param_name : "";
+	return node;
+}
+
 Type * ast_node::typeAttr2Type(type_attr & attr)
 {
 	if (attr.type == BasicType::TYPE_INT) {

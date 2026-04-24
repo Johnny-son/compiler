@@ -27,6 +27,12 @@ protected:
 	// 非终结运算符funcDef的遍历
 	std::any visitFuncDef(MiniCParser::FuncDefContext * ctx) override;
 
+	// 非终结符FuncFParams的分析
+	std::any visitFuncFParams(MiniCParser::FuncFParamsContext * ctx) override;
+
+	// 非终结符FuncFParam的分析
+	std::any visitFuncFParam(MiniCParser::FuncFParamContext * ctx) override;
+
 	// 非终结运算符block的遍历
 	std::any visitBlock(MiniCParser::BlockContext * ctx) override;
 
