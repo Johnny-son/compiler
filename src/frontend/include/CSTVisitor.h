@@ -48,8 +48,32 @@ protected:
 	// 非终结运算符statement中的returnStatement的遍历
 	std::any visitReturnStatement(MiniCParser::ReturnStatementContext * ctx) override;
 
+	// 内部产生的非终结符ifStatement的分析
+	std::any visitIfStatement(MiniCParser::IfStatementContext * ctx) override;
+
+	// 内部产生的非终结符whileStatement的分析
+	std::any visitWhileStatement(MiniCParser::WhileStatementContext * ctx) override;
+
+	// 内部产生的非终结符breakStatement的分析
+	std::any visitBreakStatement(MiniCParser::BreakStatementContext * ctx) override;
+
+	// 内部产生的非终结符continueStatement的分析
+	std::any visitContinueStatement(MiniCParser::ContinueStatementContext * ctx) override;
+
 	// 非终结运算符expr的遍历
 	std::any visitExpr(MiniCParser::ExprContext * ctx) override;
+
+	// 非终结符LOrExp的分析
+	std::any visitLOrExp(MiniCParser::LOrExpContext * ctx) override;
+
+	// 非终结符LAndExp的分析
+	std::any visitLAndExp(MiniCParser::LAndExpContext * ctx) override;
+
+	// 非终结符EqExp的分析
+	std::any visitEqExp(MiniCParser::EqExpContext * ctx) override;
+
+	// 非终结符RelExp的分析
+	std::any visitRelExp(MiniCParser::RelExpContext * ctx) override;
 
 	// 内部产生的非终结符assignStatement的分析
 	std::any visitAssignStatement(MiniCParser::AssignStatementContext * ctx) override;
@@ -71,6 +95,9 @@ protected:
 
 	// 非终结符unaryExp的分析
 	std::any visitUnaryExp(MiniCParser::UnaryExpContext * ctx) override;
+
+	// 非终结符unaryOp的分析
+	std::any visitUnaryOp(MiniCParser::UnaryOpContext * ctx) override;
 
 	// 非终结符PrimaryExp的分析
 	std::any visitPrimaryExp(MiniCParser::PrimaryExpContext * ctx) override;

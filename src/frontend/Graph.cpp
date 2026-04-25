@@ -73,11 +73,50 @@ string getNodeName(ast_node * astnode)
 		case ast_operator_type::AST_OP_ASSIGN:
 			nodeName = "=";
 			break;
+		case ast_operator_type::AST_OP_IF:
+			nodeName = "if";
+			break;
+		case ast_operator_type::AST_OP_WHILE:
+			nodeName = "while";
+			break;
+		case ast_operator_type::AST_OP_BREAK:
+			nodeName = "break";
+			break;
+		case ast_operator_type::AST_OP_CONTINUE:
+			nodeName = "continue";
+			break;
 		case ast_operator_type::AST_OP_FUNC_CALL:
 			nodeName = "func-call";
 			break;
 		case ast_operator_type::AST_OP_FUNC_REAL_PARAMS:
 			nodeName = "real-params";
+			break;
+		case ast_operator_type::AST_OP_EQ:
+			nodeName = "==";
+			break;
+		case ast_operator_type::AST_OP_NE:
+			nodeName = "!=";
+			break;
+		case ast_operator_type::AST_OP_LT:
+			nodeName = "<";
+			break;
+		case ast_operator_type::AST_OP_LE:
+			nodeName = "<=";
+			break;
+		case ast_operator_type::AST_OP_GT:
+			nodeName = ">";
+			break;
+		case ast_operator_type::AST_OP_GE:
+			nodeName = ">=";
+			break;
+		case ast_operator_type::AST_OP_LAND:
+			nodeName = "&&";
+			break;
+		case ast_operator_type::AST_OP_LOR:
+			nodeName = "||";
+			break;
+		case ast_operator_type::AST_OP_NOT:
+			nodeName = "!";
 			break;
 			// TODO 这里追加其它类型的结点，返回对应结点的字符串
 

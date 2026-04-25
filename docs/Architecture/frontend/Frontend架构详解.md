@@ -51,11 +51,10 @@
 当前文法覆盖：
 
 - 编译单元：`compUnit: (funcDef | varDecl)* EOF;`
-- 函数定义：`int` 返回、无形参函数体
+- 函数定义：`int` 返回、`int` 标量形参、函数调用与实参列表
 - 声明：`int` 变量声明、逗号分隔、可选初始化
-- 语句：`return`、赋值、块、表达式语句、空语句
-- 表达式：`addExp/mulExp/unaryExp/primaryExp`
-- 函数调用：`ID '(' realParamList? ')'`
+- 语句：`return`、赋值、`if/else`、`while`、`break/continue`、块、表达式语句、空语句
+- 表达式：关系表达式、相等表达式、逻辑与/或、一元 `+/-/!`、算术表达式、基本表达式
 - 词法 token：关键字、标识符、数字、注释、空白
 
 与其它文件关系：
@@ -94,7 +93,7 @@
 
 核心内容：
 
-- `enum class ast_operator_type`：叶子节点 + 内部节点（函数定义、块、return、赋值、二元运算等）。
+- `enum class ast_operator_type`：叶子节点 + 内部节点（函数定义、块、return、赋值、分支、循环、关系/逻辑运算等）。
 - `ast_node` 构造/工厂接口：`New(...)`、`create_func_def(...)`、`create_func_call(...)` 等。
 - 树操作接口：`insert_son_node`、`Delete`。
 - 中端复用字段：`blockInsts`、`val`。
@@ -173,16 +172,16 @@
 
 关键实现点（按语义类型）：
 
-- 编译单元：`visitCompUnit` 先处理全局声明，再处理函数。
+- 编译单元：`visitCompUnit` 按源程序出现顺序构造全局声明与函数定义。
 - 函数定义：`visitFuncDef` 组装返回类型、函数名、函数体。
-- 块与语句：`visitBlock/visitBlockItemList/visitStatement`。
-- 表达式树：`visitAddExp/visitMulExp/visitUnaryExp/visitPrimaryExp` 维护结合性。
+- 块与语句：`visitBlock/visitBlockItemList/visitStatement`，覆盖 `if/while/break/continue`。
+- 表达式树：`visitRelExp/visitEqExp/visitLAndExp/visitLOrExp` 与 `visitAddExp/visitMulExp/visitUnaryExp/visitPrimaryExp` 共同维护优先级与结合性。
 - 调用与参数：`visitRealParamList` 构建 `AST_OP_FUNC_REAL_PARAMS`。
 - 变量声明：`visitVarDecl` 支持逗号声明与可选初始化表达式。
 
 重要设计细节：
 
-- 一元负号被翻译成 `0 - expr` 的二元减法树，复用后续中端算术逻辑。
+- 一元负号被翻译成 `0 - expr` 的二元减法树，复用后续中端算术逻辑；一元正号直接透传，逻辑非生成独立节点。
 - 空语句返回 `nullptr`，由上层 block 插入时跳过。
 
 ---
@@ -306,7 +305,7 @@
 
 建议扩展顺序：
 
-1. 在 `MiniC.g4` 增量扩语法（条件、循环、比较、逻辑表达式）。
-2. 在 `CSTVisitor.cpp` 同步补 AST 节点与构造规则。
-3. 在 `AST.h/AST.cpp` 扩 `AST_OP_*` 与工厂函数。
-4. 用 AST 图导出先验收结构正确，再推进中端翻译。
+1. 沿 `MiniC.g4 -> AST.h -> CSTVisitor.cpp` 的顺序继续扩数组、`const`、更多声明形态。
+2. 把函数签名一致性、return 完整性、控制流约束等语义检查继续前移并细化阶段边界。
+3. 表达式新增时继续沿用“文法优先级分层 + Visitor 左结合构树”的模式，避免在 visitor 中手写优先级。
+4. 先用 AST 图导出和 `contesttestcases` 做结构回归，再推进中端和后端联调。
