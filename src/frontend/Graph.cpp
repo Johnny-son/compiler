@@ -258,7 +258,7 @@ void OutputAST(ast_node * root, const std::string filePath)
 	// agsafeset(g, (char *)"rankdir", (char *)"LR", (char *)"LR");
 
 	// 指定输出的图像质量
-	agsafeset(g, (char *) "dpi", (char *) "600", (char *) "");
+	agsafeset(g, (char *) "dpi", (char *) "200", (char *) "");
 
 	// 遍历AST产生图形的结点以及相关边
 	(void) graph_visit_ast_node(g, root);

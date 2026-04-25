@@ -10,7 +10,7 @@
 
 - 模板：`IR错误[Exxxx] 第N行 类别: 详细原因`
 - 行号缺失：`IR错误[Exxxx] 未知行 类别: 详细原因`
-- 错误码分段：`E10xx` 节点分发、`E11xx` 函数/形参、`E12xx` 调用参数、`E13xx` 声明初始化、`E14xx` 模块符号、`E15xx` 调用约定
+- 错误码分段：`E10xx` 节点分发、`E11xx` 函数/形参与 return、`E12xx` 调用参数/控制流/逻辑运算、`E13xx` 声明初始化、`E14xx` 模块符号、`E15xx` 调用约定
 
 ---
 
@@ -114,11 +114,13 @@ Module::outputIR / Backend IRAdapter
 
 修改建议：
 
-- 新指令先扩 `IRInstOperator`，再补 `IRAdapter` 分类和后端分发。
+- 新指令先扩 `IRInstOperator`，再补 `Module::outputIR` / `IRAdapter` / 后端分发。
+- 比较类和条件跳转这类指令，要同步确认“是否有结果值”和 LLVM 文本落地方式。
 
 常见坑位：
 
 - 将有结果值的指令误设为 void type，会导致后续 result 槽位丢失。
+- 将条件跳转误设成有结果值，会污染命名和后续输出。
 
 ### 6. `src/ir/include/IRCode.h`
 
@@ -245,10 +247,12 @@ main.cpp::compile
 修改建议：
 
 - 新 AST 节点支持时，同步在这里声明 `ir_xxx` 并加入映射。
+- 控制流节点扩展时，要一起维护两阶段函数翻译接口、`block_ends_with_terminator` 和 `loopTargets`。
 
 常见坑位：
 
 - 声明了 handler 但构造函数未注册，会落入 `ir_default` 静默跳过。
+- `loopTargets` 的 `(continue, break)` 顺序写反，会直接让 `break/continue` 语义颠倒。
 
 ### 12. `src/ir/include/IRConstant.h`
 
@@ -443,7 +447,9 @@ IRGenerator
 
 - 作用域栈全局层必须先 `enterScope`，否则全局变量插入失败。
 - `newVarValue` 在全局场景要求 name 非空，匿名全局会报错。
+- `newFunction/newVarValue` 现在都会检查函数与全局变量同名，排查“重复定义”时不要只盯单一符号表。
 - 输出 LLVM 文本时 label 命名 sanitize 规则改动会影响分支目标一致性。
+- 比较指令输出会先 `icmp` 再 `zext`，条件跳转会把 `i32` 条件转成 `i1`；修改布尔表示时两处要一起改。
 - 变量重名/全局变量空名错误现已统一到 `E1400/E1401`，排查时优先按错误码定位入口。
 
 ### 20. `src/ir/IRGenerator.cpp`
@@ -456,14 +462,18 @@ IRGenerator
 IRGenerator::run
   -> ir_visit_ast_node(root)
      -> ir_compile_unit
+        -> predeclare_function
         -> ir_function_define
-           -> EntryInstruction
-           -> ir_function_formal_params
-           -> ir_block
-           -> LabelInstruction(exit)
-           -> ExitInstruction
+           -> ir_function_body
+              -> EntryInstruction
+              -> ir_function_formal_params
+              -> ir_block
+              -> LabelInstruction(exit)
+              -> ExitInstruction
         -> ir_declare_statment / ir_variable_declare
-        -> ir_add/sub/mul/div/mod
+        -> ir_add/sub/mul/div/mod/eq/ne/lt/le/gt/ge
+        -> ir_logical_not / ir_logical_and / ir_logical_or
+        -> ir_if / ir_while / ir_break / ir_continue
         -> ir_assign
         -> ir_return
         -> ir_function_call
@@ -471,7 +481,6 @@ IRGenerator::run
 
 修改建议：
 
-- 先补全 `ir_function_formal_params`（这是当前语义短板之一）。
 - 可引入统一错误上报对象，把 TODO 处语义错误补齐。
 - 大表达式翻译可抽共用 `translateBinaryOp` 减少重复代码。
 - `eval_global_const_expr` 可独立成 utility，便于测试。
@@ -480,7 +489,10 @@ IRGenerator::run
 
 - `E1000`：不支持的 AST 节点类型
 - `E1100-E1112`：函数定义与形参翻译阶段错误
-- `E1200-E1202`：函数调用语义检查（未定义、参数个数、参数类型）
+- `E1120-E1122`：return 语义检查
+- `E1200-E1203`：函数调用语义检查（未定义、参数个数、参数类型、作用域）
+- `E1210/E1211`：`break/continue` 循环上下文检查
+- `E1215/E1216`：短路逻辑结果临时变量创建失败
 - `E1301-E1302`：全局变量初始化错误
 
 常见坑位：
@@ -488,6 +500,9 @@ IRGenerator::run
 - `block_node->needScope=false` 是函数体特殊逻辑，改动需谨慎。
 - 标识符查找失败时 `node->val` 为空，后续直接用会崩。
 - 赋值左右求值顺序与副作用语义相关，改顺序会破坏行为。
+- `ir_compile_unit` 的“先预声明函数，再翻译函数体”顺序不能打乱，否则前向调用和递归会退化。
+- `loopTargets` 必须成对 push/pop；异常返回分支漏 pop 会污染外层循环。
+- `block_ends_with_terminator` 漏判会让 `if/while` 多补一条跳转，生成冗余甚至错误控制流。
 
 ---
 
@@ -620,7 +635,7 @@ toString
 关键函数调用链图：
 
 ```text
-IRGenerator::ir_return / future branch
+IRGenerator::ir_return / ir_break / ir_continue
   -> new GotoInstruction(func, targetLabel)
 Backend IRAdapter
   -> IRInstView::targetLabelRaw
@@ -628,7 +643,7 @@ Backend IRAdapter
 
 修改建议：
 
-- 若支持条件跳转，新增 `BrInstruction` 而非复用 goto。
+- 保持 Goto 只承担无条件跳转；条件分支继续由 `CondBranchInstruction` 单独承担。
 
 常见坑位：
 
@@ -654,6 +669,52 @@ toString
 常见坑位：
 
 - static_cast 在非法输入下无保护，调试阶段建议加 assert。
+
+### 28A. `src/ir/Instructions/CondBranchInstruction.h`
+
+文件职责：条件跳转指令声明。
+
+关键函数调用链图：
+
+```text
+IRGenerator::ir_if / ir_while / ir_logical_and / ir_logical_or
+  -> new CondBranchInstruction(func, cond, trueLabel, falseLabel)
+Backend IRAdapter / Module::outputIR
+  -> getCondition/getTrueTarget/getFalseTarget
+```
+
+修改建议：
+
+- 若后续引入 basic block，可把 `Goto/CondBranch` 抽成统一 Branch 家族。
+
+常见坑位：
+
+- 条件值走 operand，真假目标走成员字段；两者不要混进同一套索引语义。
+- 当前条件值约定是 `i32 0/1`，若改成独立 bool type，要同步 emitter 和短路逻辑。
+
+### 28B. `src/ir/Instructions/CondBranchInstruction.cpp`
+
+文件职责：条件跳转指令实现。
+
+关键函数调用链图：
+
+```text
+CondBranchInstruction ctor
+  -> addOperand(cond)
+toString
+  -> "br cond, label trueTarget, label falseTarget"
+Module::outputIR
+  -> icmp ne i32 cond, 0
+  -> br i1 ...
+```
+
+修改建议：
+
+- 条件转 `i1` 的策略当前放在 `Module::outputIR`，若迁移到别处，文档和实现要一起改。
+
+常见坑位：
+
+- 不要在 IRGenerator 里重复手搓“与 0 比较”的分支条件，避免和输出层职责重叠。
 
 ### 29. `src/ir/Instructions/MoveInstruction.h`
 
@@ -698,12 +759,12 @@ toString
 
 ### 31. `src/ir/Instructions/BinaryInstruction.h`
 
-文件职责：二元算术指令声明。
+文件职责：二元算术/比较指令声明。
 
 关键函数调用链图：
 
 ```text
-IRGenerator::ir_add/sub/mul/div/mod
+IRGenerator::ir_add/sub/mul/div/mod/eq/ne/lt/le/gt/ge
   -> new BinaryInstruction(op, lhs, rhs, type)
 ```
 
@@ -717,7 +778,7 @@ IRGenerator::ir_add/sub/mul/div/mod
 
 ### 32. `src/ir/Instructions/BinaryInstruction.cpp`
 
-文件职责：二元算术指令实现。
+文件职责：二元算术/比较指令实现。
 
 关键函数调用链图：
 
@@ -725,7 +786,7 @@ IRGenerator::ir_add/sub/mul/div/mod
 BinaryInstruction ctor
   -> addOperand(lhs/rhs)
 toString
-  -> add/sub/mul/div/mod 文本
+  -> add/sub/mul/div/mod/cmp_* 文本
 ```
 
 修改建议：
@@ -1071,7 +1132,7 @@ Backend entry
 
 常见坑位：
 
-- 形参目前 IR 生成未全接通，修改时要与 `ir_function_formal_params` 联动。
+- 当前前中端只支持 `int` 标量形参；若扩数组形参或 ABI 细节，要同时修改 `Function`、`IRGenerator` 和后端入口约定。
 
 ### 49. `src/ir/Values/MemVariable.h`
 
@@ -1113,4 +1174,3 @@ Function::newMemVariable
 常见坑位：
 
 - 当前主流程未深度使用该类，扩展时要避免与 Instruction::regId 双轨冲突。
-

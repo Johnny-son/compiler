@@ -10,6 +10,7 @@
 #include "symboltable/ScopeStack.h"
 #include "ir/Instructions/ArgInstruction.h"
 #include "ir/Instructions/BinaryInstruction.h"
+#include "ir/Instructions/CondBranchInstruction.h"
 #include "ir/Instructions/EntryInstruction.h"
 #include "ir/Instructions/ExitInstruction.h"
 #include "ir/Instructions/FuncCallInstruction.h"
@@ -27,6 +28,7 @@
 
 namespace {
 
+// 统一格式化Module阶段的错误详情
 std::string format_detail(const char * format, va_list args)
 {
     if (format == nullptr) {
@@ -47,6 +49,7 @@ std::string format_detail(const char * format, va_list args)
     return std::string(buffer.data(), static_cast<std::size_t>(message_size));
 }
 
+// Module阶段统一错误输出，保持与IRGenerator一致的错误风格
 void report_module_error(const char * error_code, int64_t lineno, const char * category, const char * detail_format, ...)
 {
     va_list args;
@@ -78,11 +81,13 @@ struct LLVMEmitState {
 	std::unordered_map<const LabelInstruction *, std::string> labelNames;
 };
 
+// 生成LLVM输出阶段使用的临时SSA名字
 std::string nextLLVMTemp(LLVMEmitState & state)
 {
 	return "%llvm" + std::to_string(state.tempIndex++);
 }
 
+// 把项目内部label名字清洗成稳定的LLVM基本块名字
 std::string sanitizeLabelName(const std::string & rawName)
 {
 	std::string name = rawName;
@@ -112,6 +117,7 @@ std::string sanitizeLabelName(const std::string & rawName)
 	return result;
 }
 
+// 追加函数签名文本，供declare/define两条路径复用
 void appendFunctionSignature(std::string & out, Function * func, bool withNames)
 {
 	out += func->getReturnType()->toString();
@@ -136,6 +142,7 @@ void appendFunctionSignature(std::string & out, Function * func, bool withNames)
 	out += ")";
 }
 
+// 把项目IR里的Value翻译成LLVM右值文本
 std::string emitLLVMRValue(Value * value, LLVMEmitState & state)
 {
 	if (dynamic_cast<ConstInt *>(value) != nullptr) {
@@ -166,6 +173,7 @@ std::string emitLLVMRValue(Value * value, LLVMEmitState & state)
 	return value->getIRName();
 }
 
+// 输出一条LLVM store，目标必须是可寻址的变量
 bool emitLLVMStore(Value * dst, Value * src, LLVMEmitState & state)
 {
 	if ((dynamic_cast<LocalVariable *>(dst) == nullptr) && (dynamic_cast<GlobalVariable *>(dst) == nullptr)) {
@@ -184,6 +192,7 @@ bool emitLLVMStore(Value * dst, Value * src, LLVMEmitState & state)
 	return true;
 }
 
+// 输出LLVM函数声明
 void emitLLVMFunctionDeclaration(FILE * fp, Function * func)
 {
 	std::string decl = "declare ";
@@ -192,11 +201,13 @@ void emitLLVMFunctionDeclaration(FILE * fp, Function * func)
 	fputs(decl.c_str(), fp);
 }
 
+// 输出LLVM函数定义
 void emitLLVMFunctionDefinition(FILE * fp, Function * func)
 {
 	LLVMEmitState state;
 	state.fp = fp;
 
+	// 先为函数中的所有Label分配稳定名字，后续分支输出统一查表
 	for (auto * inst: func->getInterCode().getInsts()) {
 		if (auto * labelInst = dynamic_cast<LabelInstruction *>(inst); labelInst != nullptr) {
 			state.labelNames.insert({labelInst, sanitizeLabelName(labelInst->getIRName())});
@@ -247,6 +258,22 @@ void emitLLVMFunctionDefinition(FILE * fp, Function * func)
 				break;
 			}
 
+			case IRInstOperator::IRINST_OP_COND_BR: {
+				auto * brInst = static_cast<CondBranchInstruction *>(inst);
+				std::string condValue = emitLLVMRValue(brInst->getCondition(), state);
+				std::string condTemp = nextLLVMTemp(state);
+				// 项目IR里的布尔值统一按i32 0/1表示，输出到LLVM前先压成i1
+				fprintf(fp, "  %s = icmp ne i32 %s, 0\n", condTemp.c_str(), condValue.c_str());
+				fprintf(
+					fp,
+					"  br i1 %s, label %%%s, label %%%s\n",
+					condTemp.c_str(),
+					state.labelNames.at(brInst->getTrueTarget()).c_str(),
+					state.labelNames.at(brInst->getFalseTarget()).c_str());
+				blockTerminated = true;
+				break;
+			}
+
 			case IRInstOperator::IRINST_OP_ASSIGN: {
 				Value * dst = inst->getOperand(0);
 				Value * src = inst->getOperand(1);
@@ -258,7 +285,13 @@ void emitLLVMFunctionDefinition(FILE * fp, Function * func)
 			case IRInstOperator::IRINST_OP_SUB_I:
 			case IRInstOperator::IRINST_OP_MUL_I:
 			case IRInstOperator::IRINST_OP_DIV_I:
-			case IRInstOperator::IRINST_OP_MOD_I: {
+			case IRInstOperator::IRINST_OP_MOD_I:
+			case IRInstOperator::IRINST_OP_CMP_EQ_I:
+			case IRInstOperator::IRINST_OP_CMP_NE_I:
+			case IRInstOperator::IRINST_OP_CMP_LT_I:
+			case IRInstOperator::IRINST_OP_CMP_LE_I:
+			case IRInstOperator::IRINST_OP_CMP_GT_I:
+			case IRInstOperator::IRINST_OP_CMP_GE_I: {
 				Value * src1 = inst->getOperand(0);
 				Value * src2 = inst->getOperand(1);
 				std::string lhs = emitLLVMRValue(src1, state);
@@ -281,18 +314,57 @@ void emitLLVMFunctionDefinition(FILE * fp, Function * func)
 					case IRInstOperator::IRINST_OP_MOD_I:
 						opName = "srem";
 						break;
+					case IRInstOperator::IRINST_OP_CMP_EQ_I:
+						opName = "eq";
+						break;
+					case IRInstOperator::IRINST_OP_CMP_NE_I:
+						opName = "ne";
+						break;
+					case IRInstOperator::IRINST_OP_CMP_LT_I:
+						opName = "slt";
+						break;
+					case IRInstOperator::IRINST_OP_CMP_LE_I:
+						opName = "sle";
+						break;
+					case IRInstOperator::IRINST_OP_CMP_GT_I:
+						opName = "sgt";
+						break;
+					case IRInstOperator::IRINST_OP_CMP_GE_I:
+						opName = "sge";
+						break;
 					default:
 						break;
 				}
 
-				fprintf(
-					fp,
-					"  %s = %s %s %s, %s\n",
-					inst->getIRName().c_str(),
-					opName.c_str(),
-					inst->getType()->toString().c_str(),
-					lhs.c_str(),
-					rhs.c_str());
+				if (inst->getOp() == IRInstOperator::IRINST_OP_CMP_EQ_I || inst->getOp() == IRInstOperator::IRINST_OP_CMP_NE_I ||
+					inst->getOp() == IRInstOperator::IRINST_OP_CMP_LT_I || inst->getOp() == IRInstOperator::IRINST_OP_CMP_LE_I ||
+					inst->getOp() == IRInstOperator::IRINST_OP_CMP_GT_I || inst->getOp() == IRInstOperator::IRINST_OP_CMP_GE_I) {
+					// LLVM的icmp直接产生i1，这里再扩成i32，保持与项目IR的布尔表示一致
+					std::string cmpTemp = nextLLVMTemp(state);
+					fprintf(
+						fp,
+						"  %s = icmp %s %s %s, %s\n",
+						cmpTemp.c_str(),
+						opName.c_str(),
+						inst->getType()->toString().c_str(),
+						lhs.c_str(),
+						rhs.c_str());
+					fprintf(
+						fp,
+						"  %s = zext i1 %s to %s\n",
+						inst->getIRName().c_str(),
+						cmpTemp.c_str(),
+						inst->getType()->toString().c_str());
+				} else {
+					fprintf(
+						fp,
+						"  %s = %s %s %s, %s\n",
+						inst->getIRName().c_str(),
+						opName.c_str(),
+						inst->getType()->toString().c_str(),
+						lhs.c_str(),
+						rhs.c_str());
+				}
 				break;
 			}
 
@@ -414,6 +486,11 @@ Function * Module::newFunction(std::string name, Type * returnType, std::vector<
 		return nullptr;
 	}
 
+	// 全局变量与函数共用顶层命名空间，名称冲突时直接拒绝
+	if (findGlobalVariable(name) != nullptr) {
+		return nullptr;
+	}
+
 	// 根据形参创建形参类型清单
 	std::vector<Type *> paramsType;
 	paramsType.reserve(params.size());
@@ -528,6 +605,12 @@ Value * Module::newVarValue(Type * type, const std::string & name, int64_t linen
 		Value * tempValue = scopeStack->findCurrentScope(name);
 		if (tempValue) {
 			// 变量存在，语义错误
+			report_module_error("E1400", lineno, "符号检查", "变量(%s)已经存在", name.c_str());
+			return nullptr;
+		}
+
+		// 全局变量名也不能和函数名冲突，避免顶层符号表出现二义性
+		if (!currentFunc && findFunction(name) != nullptr) {
 			report_module_error("E1400", lineno, "符号检查", "变量(%s)已经存在", name.c_str());
 			return nullptr;
 		}

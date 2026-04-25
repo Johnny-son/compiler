@@ -38,8 +38,8 @@ IR错误[Exxxx] 未知行 类别: 详细原因
 当前错误码分段约定：
 
 - `E10xx`：节点分发与通用翻译错误
-- `E11xx`：函数定义/形参翻译错误
-- `E12xx`：函数调用参数检查错误
+- `E11xx`：函数定义、形参与 return 语义错误
+- `E12xx`：函数调用、控制流与逻辑翻译错误
 - `E13xx`：变量声明与初始化错误
 - `E14xx`：模块符号检查错误
 - `E15xx`：调用约定与 ARG 计数一致性错误
@@ -169,8 +169,9 @@ IR 中最核心的抽象关系是：
 
 操作码覆盖：
 
-- `ENTRY/EXIT/LABEL/GOTO`
+- `ENTRY/EXIT/LABEL/GOTO/COND_BR`
 - `ADD/SUB/MUL/DIV/MOD`
+- `CMP_EQ/CMP_NE/CMP_LT/CMP_LE/CMP_GT/CMP_GE`
 - `ASSIGN/FUNC_CALL/ARG`
 
 关键能力：
@@ -215,6 +216,8 @@ IR 中最核心的抽象关系是：
 
 - `ast_operator_type -> handler` 映射表分发
 - 为每类 AST 节点定义 `ir_xxx` 处理函数
+- 通过 `predeclare_function + ir_function_body` 两阶段支持前向调用与递归
+- 通过 `loopTargets` 维护 `break/continue` 所需的循环跳转目标
 
 ### `src/ir/include/IRConstant.h`
 
@@ -313,8 +316,8 @@ IR 中最核心的抽象关系是：
 - `newFunction/newVarValue/findVarValue` 负责语义构建阶段的对象管理。
 - `newConstInt` 做整型常量池去重。
 - `outputIR` 输出：内置声明 -> 全局定义 -> 用户函数定义。
-- 文件顶部一组 `emitLLVM...` 辅助函数实现 IR 指令到 LLVM 文本映射。
-- `newVarValue` 的符号冲突/非法全局名错误已统一为 `E1400/E1401` 风格输出。
+- 文件顶部一组 `emitLLVM...` 辅助函数实现 IR 指令到 LLVM 文本映射，其中比较指令会落成 `icmp + zext`，条件跳转会落成 `icmp ne i32 cond, 0 + br i1`。
+- `newFunction/newVarValue` 会阻止函数与全局变量同名；符号冲突/非法全局名错误已统一为 `E1400/E1401` 风格输出。
 
 ### `src/ir/IRGenerator.cpp`
 
@@ -325,25 +328,27 @@ IR 中最核心的抽象关系是：
 关键实现点：
 
 - 构造函数中注册全部节点 handler。
-- `ir_function_define` 建立函数框架：entry、统一出口 label、exit。
+- `ir_compile_unit` 先预声明函数签名，再翻译全局变量和函数体，支持先调用后定义与递归。
+- `ir_function_define` 串联 `predeclare_function + ir_function_body`；函数体内统一建立 entry、返回槽、exit label 与 exit 指令。
+- `ir_function_formal_params` 把形式参数映射到当前函数作用域变量，并用 `MoveInstruction` 落地，后续按普通局部变量处理。
 - `ir_block` 负责按 `needScope` 控制作用域入栈/出栈。
 - `ir_return`：return 值写入函数返回槽，再 goto 统一出口。
-- `ir_add/sub/mul/div/mod`：生成 `BinaryInstruction`。
+- `ir_add/sub/mul/div/mod/eq/ne/lt/le/gt/ge`：生成算术或比较 `BinaryInstruction`，比较结果统一落成 `i32 0/1`。
+- `ir_logical_not` 把逻辑非翻译成“与 0 比较”；`ir_logical_and/or` 通过标签与条件跳转实现短路求值。
+- `ir_if/ir_while` 负责分支与循环标签编排，`block_ends_with_terminator` 避免重复补跳转。
+- `loopTargets` 维护 `(continueTarget, breakTarget)` 栈，用于 `ir_break/ir_continue`。
 - `ir_assign`：生成 `MoveInstruction`。
 - `ir_variable_declare`：局部/全局变量声明与初始化。
-- `eval_global_const_expr`：全局初始化常量折叠（仅整数表达式）。
+- `eval_global_const_expr`：全局初始化常量折叠，已覆盖整数、比较和逻辑表达式。
 - `ir_function_call`：实参求值 + 参数个数校验 + 调用指令生成。
 - `report_ir_error`：IR 统一诊断入口，负责错误码、位置和类别格式化输出。
-
-当前 TODO 重点：
-
-- 形参翻译目前占位（`ir_function_formal_params` 未实装）。
-- 语义检查仍有扩展空间。
 
 已统一的典型错误：
 
 - 函数形参节点非法（`E1101`）
 - 函数形参数量不一致（`E1111`）
+- `void` 函数返回表达式 / 非 `void` 函数缺返回值 / 函数外 return（`E1120/E1121/E1122`）
+- `break/continue` 不在循环内（`E1210/E1211`）
 - 全局变量初始化表达式非法（`E1301`）
 - 全局变量初始化落地失败（`E1302`）
 
@@ -532,6 +537,19 @@ IR 中最核心的抽象关系是：
 - 实现 `br label target` 形式输出。
 - 提供 `getTarget()` 给后端读取。
 
+### `src/ir/Instructions/CondBranchInstruction.h`
+
+主要作用：
+
+- 声明条件跳转指令类，保存条件值和真假分支目标。
+
+### `src/ir/Instructions/CondBranchInstruction.cpp`
+
+主要作用：
+
+- 实现 `br cond, label trueTarget, label falseTarget` 形式输出。
+- 供 `if/while` 与短路逻辑翻译共享。
+
 ### `src/ir/Instructions/MoveInstruction.h`
 
 主要作用：
@@ -548,13 +566,13 @@ IR 中最核心的抽象关系是：
 
 主要作用：
 
-- 声明二元算术指令类。
+- 声明二元算术/比较指令类。
 
 ### `src/ir/Instructions/BinaryInstruction.cpp`
 
 主要作用：
 
-- 根据操作码输出 `add/sub/mul/div/mod` 指令文本。
+- 根据操作码输出 `add/sub/mul/div/mod/cmp_*` 指令文本。
 
 ### `src/ir/Instructions/FuncCallInstruction.h`
 
@@ -608,13 +626,13 @@ IR 中最核心的抽象关系是：
 
 当前边界：
 
-- 形参翻译仍是占位实现。
-- 全局初始化表达式仅支持整数常量可折叠路径。
-- 一些语义错误检查处于 TODO。
+- 函数定义/调用当前支持 `int` 返回值与 `int` 标量形参，尚未扩到数组形参和更完整类型系统。
+- 全局初始化表达式仍限定为可常量折叠的整数/比较/逻辑表达式。
+- LLVM 文本输出仍集中在 `Module` 内部，尚未拆成独立 emitter 或 basic block/CFG 层。
 
 建议优先扩展：
 
-1. 完整形参语义 + 调用语义匹配（类型、个数、宽度）。
-2. 引入基础优化 pass（常量传播、死代码删除）。
+1. 扩数组、指针、`void` 函数等类型与签名，前中后端一起打通。
+2. 引入 basic block / CFG 抽象，让分支与循环不再只靠线性指令序列表达。
 3. 分离 LLVM 文本输出器与 `Module`，降低职责耦合。
-4. 扩展类型系统（数组、指针、更多标量类型）并同步后端。
+4. 再叠加基础优化 pass（常量传播、死代码删除等）。
