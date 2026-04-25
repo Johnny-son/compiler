@@ -163,6 +163,8 @@ static int compile(string inputFile, string outputFile)
 	int result = -1;
 
 	Module * module = nullptr;
+	IRGenerator * ir_generator = nullptr;
+	ast_node * astRoot = nullptr;
 
 	// 这里采用do {} while(0)架构的目的是如果处理出错可通过break退出循环, 出口唯一
 	// 在编译器编译优化时会自动去除, 因为while恒假的缘故
@@ -182,11 +184,12 @@ static int compile(string inputFile, string outputFile)
 
 		if (!ast_generator->run()) {
 			Status::Error("前端分析错误");
+			delete ast_generator;
 			break;
 		}
 
 		// 获取抽象语法树的根节点
-		ast_node * astRoot = ast_generator->getASTRoot();
+		astRoot = ast_generator->getASTRoot();
 		delete ast_generator;  // 清理前端资源
 
 		// 这里可进行非线性AST的优化
@@ -194,7 +197,6 @@ static int compile(string inputFile, string outputFile)
 
 		if (gShowAST) {
 			OutputAST(astRoot, outputFile);  // 遍历抽象语法树，生成抽象语法树图片
-			ast_node::Delete(astRoot);  // 清理抽象语法树
 			result = 0;  // 设置返回结果：正常
 			break;
 		}
@@ -205,10 +207,9 @@ static int compile(string inputFile, string outputFile)
 		// ===中端执行: 遍历AST转换成线性IR指令===
 
 		// 符号表，保存所有的变量以及函数等信息
-		Module * module = new Module(inputFile);
+		module = new Module(inputFile);
 
 		// 遍历抽象语法树产生线性IR，相关信息保存到符号表中
-		IRGenerator * ir_generator = nullptr;
 		ir_generator = new IRGenerator(astRoot, module);
 		
 		if (!ir_generator->run()) {
@@ -216,8 +217,12 @@ static int compile(string inputFile, string outputFile)
 			break;
 		}
 
+		delete ir_generator;
+		ir_generator = nullptr;
+
 		// 清理抽象语法树
 		ast_node::Delete(astRoot);
+		astRoot = nullptr;
 
 		if (gShowLineIR) {
 			module->renameIR();  // 对IR的名字重命名
@@ -252,15 +257,19 @@ static int compile(string inputFile, string outputFile)
 			}
 		}
 
-		// 清理符号表
-		module->Delete();
-
 		// 成功执行
 		result = 0;
 
 	} while (false);
 
-	delete module;
+	delete ir_generator;
+	if (astRoot != nullptr) {
+		ast_node::Delete(astRoot);
+	}
+	if (module != nullptr) {
+		module->Delete();
+		delete module;
+	}
 
 	return result;
 }

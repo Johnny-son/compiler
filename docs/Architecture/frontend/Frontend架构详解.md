@@ -51,7 +51,7 @@
 当前文法覆盖：
 
 - 编译单元：`compUnit: (funcDef | varDecl)* EOF;`
-- 函数定义：`int` 返回、无形参函数体
+- 函数定义：`int` 返回、可选 `int` 标量形参列表、函数体
 - 声明：`int` 变量声明、逗号分隔、可选初始化
 - 语句：`return`、赋值、块、表达式语句、空语句
 - 表达式：`addExp/mulExp/unaryExp/primaryExp`
