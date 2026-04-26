@@ -62,6 +62,18 @@ enum class ast_operator_type : int {
 	// 赋值语句运算符
 	AST_OP_ASSIGN,
 
+	// if语句运算符，孩子为条件、then分支、可选else分支
+	AST_OP_IF,
+
+	// while语句运算符，孩子为条件、循环体
+	AST_OP_WHILE,
+
+	// break语句运算符
+	AST_OP_BREAK,
+
+	// continue语句运算符
+	AST_OP_CONTINUE,
+
 	// 变量声明语句
 	AST_OP_DECL_STMT,
 
@@ -83,7 +95,32 @@ enum class ast_operator_type : int {
 	// 二元运算符%
 	AST_OP_MOD,
 
-	// TODO 抽象语法树其它内部节点运算符追加
+	// 二元比较运算符==
+	AST_OP_EQ,
+
+	// 二元比较运算符!=
+	AST_OP_NE,
+
+	// 二元比较运算符<
+	AST_OP_LT,
+
+	// 二元比较运算符<=
+	AST_OP_LE,
+
+	// 二元比较运算符>
+	AST_OP_GT,
+
+	// 二元比较运算符>=
+	AST_OP_GE,
+
+	// 逻辑与运算符&&
+	AST_OP_LAND,
+
+	// 逻辑或运算符||
+	AST_OP_LOR,
+
+	// 逻辑非运算符!
+	AST_OP_NOT,
 
 	// 最大标识符，表示非法运算符
 	AST_OP_MAX,

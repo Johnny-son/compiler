@@ -34,8 +34,29 @@ enum class IRInstOperator : std::int8_t {
 	/// @brief 整数的求余指令，二元运算
 	IRINST_OP_MOD_I,
 
+	/// @brief 整数相等比较指令，结果为0/1
+	IRINST_OP_CMP_EQ_I,
+
+	/// @brief 整数不等比较指令，结果为0/1
+	IRINST_OP_CMP_NE_I,
+
+	/// @brief 整数小于比较指令，结果为0/1
+	IRINST_OP_CMP_LT_I,
+
+	/// @brief 整数小于等于比较指令，结果为0/1
+	IRINST_OP_CMP_LE_I,
+
+	/// @brief 整数大于比较指令，结果为0/1
+	IRINST_OP_CMP_GT_I,
+
+	/// @brief 整数大于等于比较指令，结果为0/1
+	IRINST_OP_CMP_GE_I,
+
 	/// @brief 赋值指令，一元运算
 	IRINST_OP_ASSIGN,
+
+	/// @brief 条件跳转指令，cond!=0时跳转true标签，否则跳转false标签
+	IRINST_OP_COND_BR,
 
 	/// @brief 函数调用，多目运算，个数不限
 	IRINST_OP_FUNC_CALL,

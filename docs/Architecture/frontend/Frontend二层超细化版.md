@@ -21,7 +21,8 @@ CMake custom command
 修改建议：
 
 - 新语法先在 `g4` 增规则，再同步 `CSTVisitor` 节点转换。
-- 对运算优先级改动必须同时验证 `addExp/mulExp/unaryExp` 结构。
+- 对运算优先级改动必须同时验证 `relExp/eqExp/lAndExp/lOrExp/addExp/mulExp/unaryExp` 分层。
+- `if/else`、`while`、函数形参与实参列表这类成组规则，改文法时要连同 `statement/funcDef/unaryExp` 入口一起检查。
 
 常见坑位：
 
@@ -171,20 +172,24 @@ ASTGenerator::run
 run
   -> visitCompUnit
      -> visitVarDecl / visitFuncDef
-        -> visitBlock -> visitBlockItemList -> visitStatement
-           -> visitExpr -> visitAddExp -> visitMulExp -> visitUnaryExp -> visitPrimaryExp
+        -> visitFuncFParams / visitBlock
+           -> visitBlockItemList -> visitStatement
+              -> visitIfStatement / visitWhileStatement / visitBreakStatement / visitContinueStatement
+              -> visitExpr -> visitLOrExp -> visitLAndExp -> visitEqExp -> visitRelExp
+                 -> visitAddExp -> visitMulExp -> visitUnaryExp -> visitPrimaryExp
 ```
 
 修改建议：
 
-- 扩新语句（if/while）时，先保证 AST 结构正确，再让 IRGenerator 对接。
-- 对表达式节点建议统一“左结合构树”模式，保持与现有 add/mul 一致。
+- 新语法继续沿“文法分层 + 左结合构树”扩，关系/逻辑表达式保持与 `add/mul` 同一套路。
+- `visitCompUnit` 必须保留源码顺序，避免把全局声明和函数定义重排。
 
 常见坑位：
 
 - 一元负号当前转成 `0 - expr`，如果后续加入类型系统需注意常量 0 的类型。
 - `visitExpressionStatement` 返回 `nullptr` 表示空语句，上层插入孩子前必须判空。
-- 函数/变量声明顺序语义检查目前尚未完整，容易漏报。
+- 给新运算符补了文法却没同步 `buildLeftAssociativeBinaryTree` 的操作符映射，会生成错误 AST。
+- 把 `visitCompUnit` 写成“先收集变量、再收集函数”会破坏源码顺序。
 
 ## 9. `src/frontend/include/Graph.h`
 
@@ -466,4 +471,3 @@ MiniC.g4
 常见坑位：
 
 - ANTLR 版本变化会让 `.interp` 变化较大，不宜用于业务 diff 评审。
-

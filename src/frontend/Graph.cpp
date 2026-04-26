@@ -73,11 +73,50 @@ string getNodeName(ast_node * astnode)
 		case ast_operator_type::AST_OP_ASSIGN:
 			nodeName = "=";
 			break;
+		case ast_operator_type::AST_OP_IF:
+			nodeName = "if";
+			break;
+		case ast_operator_type::AST_OP_WHILE:
+			nodeName = "while";
+			break;
+		case ast_operator_type::AST_OP_BREAK:
+			nodeName = "break";
+			break;
+		case ast_operator_type::AST_OP_CONTINUE:
+			nodeName = "continue";
+			break;
 		case ast_operator_type::AST_OP_FUNC_CALL:
 			nodeName = "func-call";
 			break;
 		case ast_operator_type::AST_OP_FUNC_REAL_PARAMS:
 			nodeName = "real-params";
+			break;
+		case ast_operator_type::AST_OP_EQ:
+			nodeName = "==";
+			break;
+		case ast_operator_type::AST_OP_NE:
+			nodeName = "!=";
+			break;
+		case ast_operator_type::AST_OP_LT:
+			nodeName = "<";
+			break;
+		case ast_operator_type::AST_OP_LE:
+			nodeName = "<=";
+			break;
+		case ast_operator_type::AST_OP_GT:
+			nodeName = ">";
+			break;
+		case ast_operator_type::AST_OP_GE:
+			nodeName = ">=";
+			break;
+		case ast_operator_type::AST_OP_LAND:
+			nodeName = "&&";
+			break;
+		case ast_operator_type::AST_OP_LOR:
+			nodeName = "||";
+			break;
+		case ast_operator_type::AST_OP_NOT:
+			nodeName = "!";
 			break;
 			// TODO 这里追加其它类型的结点，返回对应结点的字符串
 
@@ -219,7 +258,7 @@ void OutputAST(ast_node * root, const std::string filePath)
 	// agsafeset(g, (char *)"rankdir", (char *)"LR", (char *)"LR");
 
 	// 指定输出的图像质量
-	agsafeset(g, (char *) "dpi", (char *) "600", (char *) "");
+	agsafeset(g, (char *) "dpi", (char *) "200", (char *) "");
 
 	// 遍历AST产生图形的结点以及相关边
 	(void) graph_visit_ast_node(g, root);

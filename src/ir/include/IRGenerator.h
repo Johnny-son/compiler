@@ -1,6 +1,8 @@
 #pragma once
 
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include "frontend/include/AST.h"
 #include "Module.h"
@@ -44,11 +46,30 @@ protected:
 	// 整数求余AST节点翻译成线性中间IR
 	bool ir_mod(ast_node * node);
 
+	// 整数比较AST节点翻译成线性中间IR
+	bool ir_eq(ast_node * node);
+	bool ir_ne(ast_node * node);
+	bool ir_lt(ast_node * node);
+	bool ir_le(ast_node * node);
+	bool ir_gt(ast_node * node);
+	bool ir_ge(ast_node * node);
+
+	// 逻辑运算AST节点翻译成线性中间IR
+	bool ir_logical_and(ast_node * node);
+	bool ir_logical_or(ast_node * node);
+	bool ir_logical_not(ast_node * node);
+
 	// 赋值AST节点翻译成线性中间IR
 	bool ir_assign(ast_node * node);
 
 	// return节点翻译成线性中间IR
 	bool ir_return(ast_node * node);
+
+	// 控制流语句节点翻译成线性中间IR
+	bool ir_if(ast_node * node);
+	bool ir_while(ast_node * node);
+	bool ir_break(ast_node * node);
+	bool ir_continue(ast_node * node);
 
 	// 类型叶子节点翻译成线性中间IR
 	bool ir_leaf_node_type(ast_node * node);
@@ -71,6 +92,18 @@ protected:
 	// 计算全局变量初始化的常量整数表达式
 	bool eval_global_const_expr(ast_node * node, int32_t & value);
 
+	// 预声明函数签名
+	bool predeclare_function(ast_node * node);
+
+	// 函数体AST节点翻译成线性中间IR
+	bool ir_function_body(ast_node * node);
+
+	// 通用二元AST节点翻译成线性中间IR
+	bool ir_binary(ast_node * node, IRInstOperator op);
+
+	// 判断一段IR是否已经以终结指令结束
+	bool block_ends_with_terminator(const InterCode & code) const;
+
 	// 未知节点类型的节点处理
 	bool ir_default(ast_node * node);
 
@@ -90,4 +123,7 @@ private:
 
 	// 符号表:模块
 	Module * module;
+
+	// 循环上下文，first为continue目标，second为break目标
+	std::vector<std::pair<Instruction *, Instruction *>> loopTargets;
 };

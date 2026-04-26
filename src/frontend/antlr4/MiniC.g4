@@ -41,15 +41,31 @@ basicType: T_INT;
 // 变量定义
 varDef: T_ID (T_ASSIGN expr)?;
 
-// 目前语句支持return和赋值语句
+// 语句
 statement:
-	T_RETURN expr T_SEMICOLON			# returnStatement
+	T_RETURN expr? T_SEMICOLON			# returnStatement
 	| lVal T_ASSIGN expr T_SEMICOLON	# assignStatement
+	| T_IF T_L_PAREN expr T_R_PAREN statement (T_ELSE statement)? # ifStatement
+	| T_WHILE T_L_PAREN expr T_R_PAREN statement # whileStatement
+	| T_BREAK T_SEMICOLON				# breakStatement
+	| T_CONTINUE T_SEMICOLON			# continueStatement
 	| block								# blockStatement
 	| expr? T_SEMICOLON					# expressionStatement;
 
-// 表达式文法 expr : AddExp 表达式目前只支持加法与减法运算
-expr: addExp;
+// 表达式
+expr: lOrExp;
+
+// 逻辑或表达式
+lOrExp: lAndExp (T_LOR lAndExp)*;
+
+// 逻辑与表达式
+lAndExp: eqExp (T_LAND eqExp)*;
+
+// 相等性表达式
+eqExp: relExp ((T_EQ | T_NE) relExp)*;
+
+// 关系表达式
+relExp: addExp ((T_LT | T_LE | T_GT | T_GE) addExp)*;
 
 // 加减表达式
 addExp: mulExp (addOp mulExp)*;
@@ -64,7 +80,10 @@ mulExp: unaryExp (mulOp unaryExp)*;
 mulOp: T_MUL | T_DIV | T_MOD;
 
 // 一元表达式
-unaryExp: T_SUB unaryExp | primaryExp | T_ID T_L_PAREN realParamList? T_R_PAREN;
+unaryExp: unaryOp unaryExp | primaryExp | T_ID T_L_PAREN realParamList? T_R_PAREN;
+
+// 一元运算符
+unaryOp: T_ADD | T_SUB | T_NOT;
 
 // 基本表达式：括号表达式、整数、左值表达式
 primaryExp: T_L_PAREN expr T_R_PAREN | T_DIGIT | lVal;
@@ -86,13 +105,28 @@ T_R_BRACE: '}';
 T_ASSIGN: '=';
 T_COMMA: ',';
 
+T_EQ: '==';
+T_NE: '!=';
+T_LE: '<=';
+T_GE: '>=';
+T_LT: '<';
+T_GT: '>';
+T_LAND: '&&';
+T_LOR: '||';
+
 T_ADD: '+';
 T_SUB: '-';
 T_MUL: '*';
 T_DIV: '/';
 T_MOD: '%';
+T_NOT: '!';
 
 // 要注意关键字同样也属于T_ID，因此必须放在T_ID的前面，否则会识别成T_ID
+T_IF: 'if';
+T_ELSE: 'else';
+T_WHILE: 'while';
+T_BREAK: 'break';
+T_CONTINUE: 'continue';
 T_RETURN: 'return';
 T_INT: 'int';
 T_VOID: 'void';
