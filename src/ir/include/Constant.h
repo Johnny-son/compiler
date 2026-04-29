@@ -1,3 +1,5 @@
+// 常量类
+
 #pragma once
 
 #include "User.h"

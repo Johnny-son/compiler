@@ -1,7 +1,7 @@
+// 描述全局值或对象的类，可以是常量、函数、全局变量等
 #pragma once
 
 #include "Constant.h"
-#include "IRConstant.h"
 
 ///
 /// @brief 代表全局对象，都是常量。
@@ -51,7 +51,7 @@ public:
 	GlobalValue(Type * _type, std::string _name) : Constant(_type)
 	{
 		this->name = _name;
-		this->IRName = IR_GLOBAL_VARNAME_PREFIX + this->name;
+		this->IRName = "@" + this->name;
 	}
 
 	/// @brief 获取名字

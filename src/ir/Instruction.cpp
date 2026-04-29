@@ -1,22 +1,16 @@
+// IR指令类实现
+
 #include <string>
 
 #include "Instruction.h"
 #include "Function.h"
 
 /// @brief 构造函数
-/// @param op
 /// @param result
 /// @param srcVal1
 /// @param srcVal2
-Instruction::Instruction(Function * _func, IRInstOperator _op, Type * _type) : User(_type), op(_op), func(_func)
+Instruction::Instruction(Function * _func, Type * _type) : User(_type), func(_func)
 {}
-
-/// @brief 获取指令操作码
-/// @return 指令操作码
-IRInstOperator Instruction::getOp()
-{
-	return op;
-}
 
 /// @brief 转换成字符串
 /// @param str 转换后的字符串
@@ -56,4 +50,9 @@ Function * Instruction::getFunction()
 bool Instruction::hasResultValue()
 {
 	return !type->isVoidType();
+}
+
+bool Instruction::isTerminator() const
+{
+	return false;
 }

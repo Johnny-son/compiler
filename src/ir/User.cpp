@@ -1,3 +1,5 @@
+// 使用Value的User，该User也是Value。函数、指令都是User
+
 #include <algorithm>
 
 #include "User.h"
@@ -120,6 +122,7 @@ void User::clearOperands()
 		delete use;
 	}
 }
+
 ///
 /// @brief Get the Operands object
 /// @return std::vector<Use *>&

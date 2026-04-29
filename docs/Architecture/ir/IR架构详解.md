@@ -1,638 +1,1469 @@
-# IR 架构详解
+# MiniLLVM IR 接口调用文档
 
-本文档聚焦 `src/ir`，并按“统一对象模型 + 符号管理 + 翻译器 + 指令系统”展开。你可以把这一层理解为整个编译器的中枢层。
+本文档基于 `Johnny-son/compiler` 仓库  `src/ir` 代码整理。核心观点是：**IR 层可以被理解为一个库，`IRGenerator` 是这个库的主要调用方**。`IRGenerator` 负责遍历 AST，根据 AST 节点语义调用 `Module`、`Function`、`BasicBlock`、`IRBuilder`、`Value/User/Use`、`Type` 等接口，在内存中建立一棵 LLVM-like IR 对象图。
 
-二层超细化入口：
+---
 
-- [IR 二层超细化版](./IR二层超细化版.md)
+## 1. IR 的内存对象模型
 
-## 1. IR 层定位
-
-IR 层承担两条主线：
-
-1. 把前端 AST 翻译为线性、可执行的中间表示（指令序列）。
-2. 维护符号、作用域、类型、值依赖关系，并给后端提供稳定输入。
-
-IR 层上下游关系：
-
-- 上游输入：`frontend` 的 `ast_node`
-- 下游输出：
-  - LLVM 风格文本 IR（`Module::outputIR`）
-  - 结构化 `Module/Function/Instruction/Value`（供 backend 读取）
-
-## 1.1 统一错误输出规范（2026-04 更新）
-
-IR 层报错统一采用以下模板：
+这套 IR 不是直接拼字符串，也不是单纯线性三地址码，而是一套对象模型：
 
 ```text
-IR错误[Exxxx] 第N行 类别: 详细原因
-IR错误[Exxxx] 未知行 类别: 详细原因
+Module
+├── ConstInt 常量池
+├── GlobalVariable 全局变量
+├── Function 函数表
+│   ├── FormalParam 形参
+│   ├── BasicBlock 基本块列表
+│   │   └── Instruction 指令列表
+│   │       ├── AllocaInst
+│   │       ├── LoadInst / StoreInst
+│   │       ├── BinaryInst / ICmpInst / ZExtInst
+│   │       ├── BranchInst / ReturnInst
+│   │       ├── CallInst
+│   │       ├── GetElementPtrInst
+│   │       └── PhiInst
+│   └── 局部 IR 名字分配器
+└── ScopeStack 变量作用域栈
 ```
 
-说明：
+从值系统看：
 
-- `Exxxx` 为 IR 错误码。
-- 行号未知时固定输出“未知行”，不再输出负数行号。
-- 主流程在 IR 失败后仅输出简短汇总，避免重复细节报错。
+```text
+Value
+├── ConstInt
+├── GlobalVariable
+├── FormalParam
+├── BasicBlock
+└── Instruction
+    └── User
+        └── operands: Use[]
 
-当前错误码分段约定：
+Use
+├── usee: Value*  // 被使用的值
+└── user: User*   // 使用该值的对象
+```
 
-- `E10xx`：节点分发与通用翻译错误
-- `E11xx`：函数定义、形参与 return 语义错误
-- `E12xx`：函数调用、控制流与逻辑翻译错误
-- `E13xx`：变量声明与初始化错误
-- `E14xx`：模块符号检查错误
-- `E15xx`：调用约定与 ARG 计数一致性错误
+几个关键概念：
 
-## 2. 总体对象模型
-
-IR 中最核心的抽象关系是：
-
-- `Type`：类型
-- `Value`：值
-- `User`：使用值的值（拥有 operands）
-- `Use`：`Value <-> User` 之间的一条 def-use 边
-- `Instruction`：一种 `User`
-- `Function`：全局值，同时持有 `InterCode`
-- `Module`：源文件级容器，持有函数、全局变量、常量池、作用域栈
-
-这套设计使得数据流依赖可以追踪（例如 `replaceAllUseWith`）。
-
-## 3. 文件级详解
+1. `Module` 是顶层容器，代表一个源文件或编译单元。
+2. `Function` 保存函数签名、形参、基本块和局部命名状态。
+3. `BasicBlock` 是 CFG 节点，里面顺序保存指令。
+4. `Instruction` 同时是指令和 `Value`，所以一条 `add` 指令的结果可以直接作为下一条指令的操作数。
+5. `Value/User/Use` 建立 def-use 链，为后续优化提供基础。
+6. 当前变量 lowering 是 memory-based：变量名通常绑定到地址，读变量时 `load`，写变量时 `store`。
+7. 源语言中的 `const` 属性保存在变量对应的地址 `Value` 上，IR 层在赋值前检查该属性并输出语义错误。
 
 ---
 
-## 3.1 `include/` 协议与核心抽象
-
-### `src/ir/include/Type.h`
-
-主要作用：
-
-- 类型系统根类 `Type`。
-- 定义类型 ID 与公共查询接口（`isVoidType/isIntegerType/isPointerType/...`）。
-
-关键点：
-
-- `toString()` 为纯虚函数，具体子类负责字符串表示。
-- `getSize()` 默认返回 `-1`，由具体类型覆盖。
-
-### `src/ir/include/Value.h`
-
-主要作用：
-
-- 值系统根类 `Value`。
-
-关键字段：
-
-- `name`：源级名字
-- `IRName`：IR 输出名字
-- `type`：类型
-- `uses`：被使用边列表
-
-关键方法：
-
-- `addUse/removeUse/removeUses`
-- `replaceAllUseWith`
-- `getScopeLevel/getRegId/getMemoryAddr/getLoadRegId`（可被子类覆写）
-
-### `src/ir/include/User.h`
-
-主要作用：
-
-- `User` 继承 `Value`，表示“带操作数”的值。
-
-关键字段与能力：
-
-- `operands`（`Use*` 列表）
-- `addOperand/setOperand/removeOperand/clearOperands`
-- `getOperand/getOperandsNum/getOperandsValue`
-
-### `src/ir/include/Use.h`
-
-主要作用：
-
-- 定义 `Use` 边：一端是被使用 `Value`，另一端是使用者 `User`。
-
-关键方法：
-
-- `setUsee(newVal)`：把边重定向到新值。
-- `remove()`：从两端解绑，但不销毁 `Use` 对象本身。
-
-### `src/ir/include/Constant.h`
-
-主要作用：
-
-- 定义 `Constant : User`。
-
-语义定位：
-
-- 表示不可变值；可被复合成常量表达式。
-- `GlobalValue` 也通过该层继承链获得“值 + 操作数”能力。
-
-### `src/ir/include/GlobalValue.h`
-
-主要作用：
-
-- 定义全局实体基类 `GlobalValue : Constant`。
-
-关键语义：
-
-- 全局变量/函数都属于全局值。
-- IR 名字默认是 `@name`。
-- 包含对齐、linkage、visibility 元信息。
-
-### `src/ir/include/Function.h`
-
-主要作用：
-
-- 定义函数对象 `Function : GlobalValue`。
-
-关键字段：
-
-- 返回类型、形参列表
-- `InterCode code`
-- 局部变量列表
-- 函数出口标签、返回值槽
-- 栈帧统计信息（最大深度、最大实参数、是否存在调用等）
-
-关键方法：
-
-- `getInterCode()` 获取函数 IR
-- `newLocalVarValue()` 创建局部变量
-- `renameIR()` 完成形参/局部/指令重命名
-
-### `src/ir/include/Instruction.h`
-
-主要作用：
-
-- 定义 IR 指令基类 `Instruction : User` 及操作码 `IRInstOperator`。
-
-操作码覆盖：
-
-- `ENTRY/EXIT/LABEL/GOTO/COND_BR`
-- `ADD/SUB/MUL/DIV/MOD`
-- `CMP_EQ/CMP_NE/CMP_LT/CMP_LE/CMP_GT/CMP_GE`
-- `ASSIGN/FUNC_CALL/ARG`
-
-关键能力：
-
-- `getOp()`、`hasResultValue()`、`toString()`
-- 死代码标记 `isDead/setDead`
-- 函数归属 `getFunction()`
-
-### `src/ir/include/IRCode.h`
-
-主要作用：
-
-- 定义 `InterCode`：指令序列容器。
-
-关键能力：
-
-- `addInst(Instruction*)`
-- `addInst(InterCode&)`（拼接并转移所有权）
-- `Delete()` 统一清理指令与操作数边
-
-### `src/ir/include/Module.h`
-
-主要作用：
-
-- 定义模块容器 `Module`（一个源文件一个模块）。
-
-关键职责：
-
-- 作用域控制 `enterScope/leaveScope`
-- 当前函数状态 `getCurrentFunction/setCurrentFunction`
-- 函数表、全局变量表、常量池管理
-- `newVarValue/findVarValue` 语义分析期间的变量创建和查询
-- `renameIR/outputIR/Delete`
-
-### `src/ir/include/IRGenerator.h`
-
-主要作用：
-
-- 声明 AST -> IR 翻译器 `IRGenerator`。
-
-关键设计：
-
-- `ast_operator_type -> handler` 映射表分发
-- 为每类 AST 节点定义 `ir_xxx` 处理函数
-- 通过 `predeclare_function + ir_function_body` 两阶段支持前向调用与递归
-- 通过 `loopTargets` 维护 `break/continue` 所需的循环跳转目标
-
-### `src/ir/include/IRConstant.h`
-
-主要作用：
-
-- 汇总 IR 命名与关键字常量。
-
-关键常量：
-
-- 名字前缀：`@`、`%l`、`%t`、`%m`、`.L`
-- 关键字：`declare/define/add/sub/mul/div/mod`
+## 2. AST 如何一步步建立 IR
+
+`IRGenerator` 持有：
+
+```cpp
+ast_node * root;
+Module * module;
+IRBuilder builder;
+std::unordered_map<ast_operator_type, ast2ir_handler_t> ast2ir_handlers;
+std::vector<std::pair<BasicBlock *, BasicBlock *>> loopTargets;
+```
+
+总体流程：
+
+```text
+IRGenerator::run()
+└── ir_visit_ast_node(root)
+    └── ir_compile_unit()
+        ├── 第一阶段：predeclare_function()
+        │   └── module->newFunction()
+        ├── 第二阶段：翻译全局变量声明
+        │   └── module->newVarValue()
+        └── 第三阶段：翻译函数体
+            ├── module->setCurrentFunction(func)
+            ├── func->createBlock("entry")
+            ├── builder.setInsertPoint(entry)
+            ├── module->enterScope()
+            ├── ir_function_formal_params()
+            │   ├── createEntryAlloca()
+            │   ├── module->bindValue()
+            │   └── builder.createStore()
+            ├── ir_block()
+            └── module->leaveScope()
+```
+
+### 例子
+
+源代码：
+
+```c
+int add(int a, int b) {
+    int c;
+    c = a + b;
+    return c;
+}
+```
+
+调用过程可以理解为：
+
+```text
+1. 预声明函数
+   module->newFunction("add", i32, {FormalParam("a"), FormalParam("b")})
+
+2. 建立函数体上下文
+   func = module->findFunction("add")
+   module->setCurrentFunction(func)
+   entry = func->createBlock("entry")
+   builder.setInsertPoint(entry)
+   module->enterScope()
+
+3. 形参进入局部槽位
+   a.addr = createEntryAlloca(func, i32, "a")
+   module->bindValue("a", a.addr)
+   builder.createStore(paramA, a.addr)
+
+   b.addr = createEntryAlloca(func, i32, "b")
+   module->bindValue("b", b.addr)
+   builder.createStore(paramB, b.addr)
+
+4. 声明局部变量
+   c.addr = createEntryAlloca(func, i32, "c")
+   module->bindValue("c", c.addr)
+
+5. 翻译 a + b
+   a.addr = module->lookupValue("a")
+   b.addr = module->lookupValue("b")
+   lhs = emitRValue(a.addr)   // load
+   rhs = emitRValue(b.addr)   // load
+   sum = builder.createAdd(lhs, rhs, "addtmp")
+
+6. 赋值 c = a + b
+   c.addr = module->lookupValue("c")
+   builder.createStore(sum, c.addr)
+
+7. 返回 c
+   ret = emitRValue(c.addr)   // load
+   builder.createRet(ret)
+```
 
 ---
 
-## 3.2 核心实现文件
+# 3. Module 接口
 
-### `src/ir/Value.cpp`
+`Module` 是 IRGenerator 的全局上下文，负责函数、全局变量、常量、作用域和当前函数状态。
 
-主要作用：
+## 3.1 `Module(std::string _name)`
 
-- 实现 `Value` 通用行为。
+**功能**：创建模块对象。
 
-关键实现点：
+**输入**：
 
-- `addUse/removeUse/removeUses` 维护 def-use 列表。
-- `replaceAllUseWith` 在所有用户中替换旧值。
-- 默认寄存器/内存接口返回无效状态，等待子类覆盖。
+| 类型 | 名称 | 含义 |
+|---|---|---|
+| `std::string` | `_name` | 模块名，通常对应源文件名 |
 
-### `src/ir/User.cpp`
+**输出**：构造出 `Module` 对象。
 
-主要作用：
-
-- 实现 `User` 操作数管理。
-
-关键实现点：
-
-- `addOperand` 会创建 `Use` 并把边注册到两端。
-- `setOperand`、`replaceOperand` 支持操作数替换。
-- `clearOperands` 逐条解绑并释放边。
-
-### `src/ir/Use.cpp`
-
-主要作用：
-
-- 实现 `Use` 边的重定向与解绑。
-
-关键实现点：
-
-- `setUsee`：旧 value 去边，新 value 加边。
-- `remove`：同时通知 `usee` 与 `user` 删除此边。
-
-### `src/ir/Instruction.cpp`
-
-主要作用：
-
-- 实现 `Instruction` 基类行为。
-
-关键实现点：
-
-- `hasResultValue()` 用类型是否 `void` 判定“有无结果值”。
-- 默认 `toString()` 仅输出 unknown，具体子类覆写。
-
-### `src/ir/IRCode.cpp`
-
-主要作用：
-
-- 实现 `InterCode` 的拼接与销毁。
-
-关键实现点：
-
-- `addInst(InterCode&)` 采用“插入后清空源容器”避免双重释放。
-- `Delete()` 先 `clearOperands` 再 delete 指令。
-
-### `src/ir/Function.cpp`
-
-主要作用：
-
-- 实现函数对象行为。
-
-关键实现点：
-
-- `toString` 输出 DragonIR 风格函数文本（含 declare 行和指令行）。
-- `newLocalVarValue/newMemVariable` 创建函数内值对象。
-- `renameIR` 统一重命名形参/局部/label/结果值。
-- 维护调用统计：`realArgCount`、`maxFuncCallArgCnt` 等。
-
-### `src/ir/Module.cpp`
-
-主要作用：
-
-- 实现模块管理、符号管理和 LLVM 风格文本输出。
-
-关键实现点：
-
-- 构造时注入内置函数 `putint/getint`。
-- `newFunction/newVarValue/findVarValue` 负责语义构建阶段的对象管理。
-- `newConstInt` 做整型常量池去重。
-- `outputIR` 输出：内置声明 -> 全局定义 -> 用户函数定义。
-- 文件顶部一组 `emitLLVM...` 辅助函数实现 IR 指令到 LLVM 文本映射，其中比较指令会落成 `icmp + zext`，条件跳转会落成 `icmp ne i32 cond, 0 + br i1`。
-- `newFunction/newVarValue` 会阻止函数与全局变量同名；符号冲突/非法全局名错误已统一为 `E1400/E1401` 风格输出。
-
-### `src/ir/IRGenerator.cpp`
-
-主要作用：
-
-- 实现 AST 到 IR 的核心翻译。
-
-关键实现点：
-
-- 构造函数中注册全部节点 handler。
-- `ir_compile_unit` 先预声明函数签名，再翻译全局变量和函数体，支持先调用后定义与递归。
-- `ir_function_define` 串联 `predeclare_function + ir_function_body`；函数体内统一建立 entry、返回槽、exit label 与 exit 指令。
-- `ir_function_formal_params` 把形式参数映射到当前函数作用域变量，并用 `MoveInstruction` 落地，后续按普通局部变量处理。
-- `ir_block` 负责按 `needScope` 控制作用域入栈/出栈。
-- `ir_return`：return 值写入函数返回槽，再 goto 统一出口。
-- `ir_add/sub/mul/div/mod/eq/ne/lt/le/gt/ge`：生成算术或比较 `BinaryInstruction`，比较结果统一落成 `i32 0/1`。
-- `ir_logical_not` 把逻辑非翻译成“与 0 比较”；`ir_logical_and/or` 通过标签与条件跳转实现短路求值。
-- `ir_if/ir_while` 负责分支与循环标签编排，`block_ends_with_terminator` 避免重复补跳转。
-- `loopTargets` 维护 `(continueTarget, breakTarget)` 栈，用于 `ir_break/ir_continue`。
-- `ir_assign`：生成 `MoveInstruction`。
-- `ir_variable_declare`：局部/全局变量声明与初始化。
-- `eval_global_const_expr`：全局初始化常量折叠，已覆盖整数、比较和逻辑表达式。
-- `ir_function_call`：实参求值 + 参数个数校验 + 调用指令生成。
-- `report_ir_error`：IR 统一诊断入口，负责错误码、位置和类别格式化输出。
-
-已统一的典型错误：
-
-- 函数形参节点非法（`E1101`）
-- 函数形参数量不一致（`E1111`）
-- `void` 函数返回表达式 / 非 `void` 函数缺返回值 / 函数外 return（`E1120/E1121/E1122`）
-- `break/continue` 不在循环内（`E1210/E1211`）
-- 全局变量初始化表达式非法（`E1301`）
-- 全局变量初始化落地失败（`E1302`）
+**实现逻辑**：初始化模块名、作用域栈、函数表、全局变量表、常量表，并注册内置函数，如 `putint`、`getint`。
 
 ---
 
-## 3.3 `Types/` 类型子系统文件
+## 3.2 `std::string toString() const` / `std::string toIRString()`
 
-### `src/ir/Types/IntegerType.h`
+**功能**：把内存 IR 输出成文本 IR。
 
-主要作用：
+**输入**：无。
 
-- 定义整数类型类，支持 bool(1 bit) 和 int(32 bit) 单例。
+**输出**：
 
-### `src/ir/Types/IntegerType.cpp`
+| 类型 | 名称 | 含义 |
+|---|---|---|
+| `std::string` | 返回值 | 模块文本 IR |
 
-主要作用：
-
-- 实现 `getTypeBool/getTypeInt` 单例获取。
-
-### `src/ir/Types/VoidType.h`
-
-主要作用：
-
-- 定义 void 类型类和 `getType()` 单例接口。
-
-### `src/ir/Types/VoidType.cpp`
-
-主要作用：
-
-- 实现 void 单例创建。
-
-### `src/ir/Types/LabelType.h`
-
-主要作用：
-
-- 定义标签类型（用于 label 相关语义）。
-
-### `src/ir/Types/LabelType.cpp`
-
-主要作用：
-
-- 实现标签类型单例。
-
-### `src/ir/Types/FunctionType.h`
-
-主要作用：
-
-- 定义函数类型（返回类型 + 参数类型列表）。
-
-关键能力：
-
-- `toString` 生成函数类型文本
-- `getReturnType/getArgTypes`
-
-### `src/ir/Types/PointerType.h`
-
-主要作用：
-
-- 定义指针类型及其层级信息。
-
-关键能力：
-
-- `getPointeeType/getRootType/getDepth`
-- 静态 `get(pointee)` 通过 `StorageSet` 去重缓存
+**实现逻辑**：遍历全局变量和函数，调用对应对象的 `toString()` 拼接文本。
 
 ---
 
-## 3.4 `Values/` 值对象文件
+## 3.3 `void enterScope()`
 
-### `src/ir/Values/ConstInt.h`
+**功能**：进入新作用域。
 
-主要作用：
+**输入**：无。
 
-- 整型常量值对象。
+**输出**：无。
 
-关键点：
-
-- `getIRName()` 直接返回字面值文本。
-- 保存 `intVal`，支持 load 寄存器编号缓存。
-
-### `src/ir/Values/GlobalVariable.h`
-
-主要作用：
-
-- 全局变量值对象。
-
-关键点：
-
-- 持有 BSS/初始化状态（`inBSSSection`、`hasInitializer`、`initializerInt`）。
-- `setInitializer` 会更新是否进入 BSS。
-
-### `src/ir/Values/LocalVariable.h`
-
-主要作用：
-
-- 局部变量值对象。
-
-关键点：
-
-- 记录 `scope_level`。
-- 支持寄存器/内存地址接口覆盖。
-
-### `src/ir/Values/FormalParam.h`
-
-主要作用：
-
-- 函数形参值对象。
-
-关键点：
-
-- 保存寄存器号、内存地址、load 寄存器号。
-- 供调用约定与后端参数处理使用。
-
-### `src/ir/Values/MemVariable.h`
-
-主要作用：
-
-- 必在内存中的值对象（后端临时内存抽象）。
-
-关键点：
-
-- `getMemoryAddr` 总是可用。
-
-### `src/ir/Values/RegVariable.h`
-
-主要作用：
-
-- 寄存器值对象。
-
-关键点：
-
-- 通过 `regId` 标识物理或虚拟寄存器编号。
-- `getIRName()` 返回寄存器名。
+**实现逻辑**：转调 `ScopeStack::enterScope()`。函数体、语句块开始时调用。
 
 ---
 
-## 3.5 `Instructions/` 指令子系统文件
+## 3.4 `void leaveScope()`
 
-### `src/ir/Instructions/EntryInstruction.h`
+**功能**：退出当前作用域。
 
-主要作用：
+**输入**：无。
 
-- 声明函数入口指令类。
+**输出**：无。
 
-### `src/ir/Instructions/EntryInstruction.cpp`
-
-主要作用：
-
-- 实现入口指令构造和 `toString("entry")`。
-
-### `src/ir/Instructions/ExitInstruction.h`
-
-主要作用：
-
-- 声明函数出口指令类。
-
-### `src/ir/Instructions/ExitInstruction.cpp`
-
-主要作用：
-
-- 实现出口指令，可选带返回值操作数。
-- `toString` 输出 `exit` 或 `exit <val>`。
-
-### `src/ir/Instructions/LabelInstruction.h`
-
-主要作用：
-
-- 声明标签指令类。
-
-### `src/ir/Instructions/LabelInstruction.cpp`
-
-主要作用：
-
-- `toString` 输出 `<IRName>:`。
-
-### `src/ir/Instructions/GotoInstruction.h`
-
-主要作用：
-
-- 声明无条件跳转指令，保存目标 `LabelInstruction*`。
-
-### `src/ir/Instructions/GotoInstruction.cpp`
-
-主要作用：
-
-- 实现 `br label target` 形式输出。
-- 提供 `getTarget()` 给后端读取。
-
-### `src/ir/Instructions/CondBranchInstruction.h`
-
-主要作用：
-
-- 声明条件跳转指令类，保存条件值和真假分支目标。
-
-### `src/ir/Instructions/CondBranchInstruction.cpp`
-
-主要作用：
-
-- 实现 `br cond, label trueTarget, label falseTarget` 形式输出。
-- 供 `if/while` 与短路逻辑翻译共享。
-
-### `src/ir/Instructions/MoveInstruction.h`
-
-主要作用：
-
-- 声明赋值指令类（assign/move）。
-
-### `src/ir/Instructions/MoveInstruction.cpp`
-
-主要作用：
-
-- 实现 `dst = src` 指令构造与输出。
-
-### `src/ir/Instructions/BinaryInstruction.h`
-
-主要作用：
-
-- 声明二元算术/比较指令类。
-
-### `src/ir/Instructions/BinaryInstruction.cpp`
-
-主要作用：
-
-- 根据操作码输出 `add/sub/mul/div/mod/cmp_*` 指令文本。
-
-### `src/ir/Instructions/FuncCallInstruction.h`
-
-主要作用：
-
-- 声明函数调用指令类，保存 `calledFunction`。
-
-### `src/ir/Instructions/FuncCallInstruction.cpp`
-
-主要作用：
-
-- 实现调用指令构造、参数拼接输出、返回值输出。
-- 校验 ARG 指令计数与调用参数数量关系。
-- 当 ARG 计数与调用参数不一致且计数非零时，输出统一错误 `E1500`。
-
-### `src/ir/Instructions/ArgInstruction.h`
-
-主要作用：
-
-- 声明实参传递指令类。
-
-### `src/ir/Instructions/ArgInstruction.cpp`
-
-主要作用：
-
-- 实现 `arg <value>` 输出。
-- 顺带递增函数的 `realArgCount` 统计。
+**实现逻辑**：转调 `ScopeStack::leaveScope()`。语句块结束时调用。
 
 ---
 
-## 4. IR 层内部协作关系
+## 3.5 `Function * getCurrentFunction()`
 
-### 4.1 翻译协作
+**功能**：获取当前正在翻译的函数。
 
-- `IRGenerator` 遍历 AST。
-- `Module` 提供符号与作用域服务。
-- `Function` 承接函数级指令与变量。
-- 指令对象进入 `InterCode`。
+**输入**：无。
 
-### 4.2 命名协作
+**输出**：
 
-- `Module::renameIR` 驱动函数级重命名。
-- `Function::renameIR` 给形参、局部、label、结果值统一分配 IR 名字。
+| 类型 | 名称 | 含义 |
+|---|---|---|
+| `Function *` | 返回值 | 当前函数；全局上下文为 `nullptr` |
 
-### 4.3 输出协作
+**实现逻辑**：返回 `currentFunc`。
 
-- `Module::outputIR` 从 `Function/Instruction/Value` 读取结构信息。
-- 辅助函数按对象类型发射 LLVM 风格文本。
+---
 
-## 5. 当前边界与扩展点
+## 3.6 `void setCurrentFunction(Function * current)`
 
-当前边界：
+**功能**：设置当前函数上下文。
 
-- 函数定义/调用当前支持 `int` 返回值与 `int` 标量形参，尚未扩到数组形参和更完整类型系统。
-- 全局初始化表达式仍限定为可常量折叠的整数/比较/逻辑表达式。
-- LLVM 文本输出仍集中在 `Module` 内部，尚未拆成独立 emitter 或 basic block/CFG 层。
+**输入**：
 
-建议优先扩展：
+| 类型 | 名称 | 含义 |
+|---|---|---|
+| `Function *` | `current` | 当前函数；全局上下文传 `nullptr` |
 
-1. 扩数组、指针、`void` 函数等类型与签名，前中后端一起打通。
-2. 引入 basic block / CFG 抽象，让分支与循环不再只靠线性指令序列表达。
-3. 分离 LLVM 文本输出器与 `Module`，降低职责耦合。
-4. 再叠加基础优化 pass（常量传播、死代码删除等）。
+**输出**：无。
+
+**实现逻辑**：更新 `currentFunc`。
+
+---
+
+## 3.7 `Function * newFunction(std::string name, Type * returnType, std::vector<FormalParam *> params = {}, bool builtin = false)`
+
+**功能**：创建函数并注册到模块。
+
+**输入**：
+
+| 类型 | 名称 | 含义 |
+|---|---|---|
+| `std::string` | `name` | 函数名 |
+| `Type *` | `returnType` | 返回类型 |
+| `std::vector<FormalParam *>` | `params` | 形参列表 |
+| `bool` | `builtin` | 是否是内置函数 |
+
+**输出**：
+
+| 类型 | 名称 | 含义 |
+|---|---|---|
+| `Function *` | 返回值 | 新建函数；失败返回 `nullptr` |
+
+**实现逻辑**：检查函数重名和全局变量冲突；根据形参生成 `FunctionType`；创建 `Function`；给形参分配 IRName；插入函数映射表和函数列表。
+
+---
+
+## 3.8 `Function * createFunction(...)`
+
+**功能**：`newFunction()` 的包装接口。
+
+**输入/输出**：同 `newFunction()`。
+
+**实现逻辑**：直接调用 `newFunction()`。
+
+---
+
+## 3.9 `Function * findFunction(std::string name)` / `Function * getFunction(const std::string & name)`
+
+**功能**：按名字查找函数。
+
+**输入**：
+
+| 类型 | 名称 | 含义 |
+|---|---|---|
+| `std::string` | `name` | 函数名 |
+
+**输出**：
+
+| 类型 | 名称 | 含义 |
+|---|---|---|
+| `Function *` | 返回值 | 找到的函数；找不到为 `nullptr` |
+
+**实现逻辑**：查 `funcMap`。
+
+---
+
+## 3.10 `std::vector<GlobalVariable *> & getGlobalVariables()`
+
+**功能**：获取全局变量列表。
+
+**输入**：无。
+
+**输出**：全局变量顺序表引用。
+
+**实现逻辑**：返回 `globalVariableVector`。
+
+---
+
+## 3.11 `std::vector<Function *> & getFunctionList()`
+
+**功能**：获取函数列表。
+
+**输入**：无。
+
+**输出**：函数顺序表引用。
+
+**实现逻辑**：返回 `funcVector`。
+
+---
+
+## 3.12 `ConstInt * newConstInt(int32_t intVal)`
+
+**功能**：获取或创建整型常量。
+
+**输入**：
+
+| 类型 | 名称 | 含义 |
+|---|---|---|
+| `int32_t` | `intVal` | 常量值 |
+
+**输出**：
+
+| 类型 | 名称 | 含义 |
+|---|---|---|
+| `ConstInt *` | 返回值 | 常量对象 |
+
+**实现逻辑**：先查常量池，存在则复用，不存在则创建并插入常量表。
+
+---
+
+## 3.13 `Value * newVarValue(Type * type, const std::string & name = "", int64_t lineno = -1)`
+
+**功能**：创建变量对应的 IR 值。
+
+**输入**：
+
+| 类型 | 名称 | 含义 |
+|---|---|---|
+| `Type *` | `type` | 变量类型 |
+| `const std::string &` | `name` | 变量名 |
+| `int64_t` | `lineno` | 定义行号，用于错误信息 |
+
+**输出**：
+
+| 类型 | 名称 | 含义 |
+|---|---|---|
+| `Value *` | 返回值 | 变量值；失败为 `nullptr` |
+
+**实现逻辑**：如果当前函数为空，创建全局变量；否则创建或绑定局部变量。当前新版函数体内更常见的做法是：`IRGenerator` 用 `createEntryAlloca()` 创建入口块 alloca，再用 `bindValue()` 绑定变量名。
+
+---
+
+## 3.14 `Value * findVarValue(std::string name)`
+
+**功能**：查找变量。
+
+**输入**：变量名。
+
+**输出**：找到的 `Value *`，找不到为 `nullptr`。
+
+**实现逻辑**：先查当前作用域栈，再查全局变量。
+
+---
+
+## 3.15 `bool bindValue(const std::string & name, Value * value)`
+
+**功能**：把变量名绑定到某个 IR 值。
+
+**输入**：
+
+| 类型 | 名称 | 含义 |
+|---|---|---|
+| `const std::string &` | `name` | 变量名 |
+| `Value *` | `value` | 要绑定的值，通常是 alloca 地址 |
+
+**输出**：是否绑定成功。
+
+**实现逻辑**：向当前作用域登记名字和值的映射。
+
+---
+
+## 3.16 `Value * lookupValue(const std::string & name) const`
+
+**功能**：查找当前可见的变量值。
+
+**输入**：变量名。
+
+**输出**：当前可见的 `Value *`。
+
+**实现逻辑**：从当前作用域向外查找，再查全局变量。
+
+---
+
+## 3.17 `void outputIR(const std::string & filePath)`
+
+**功能**：输出文本 IR 到文件。
+
+**输入**：输出路径。
+
+**输出**：无。
+
+**实现逻辑**：生成文本 IR 后写入文件。
+
+---
+
+## 3.18 `void renameIR()`
+
+**功能**：统一为 IR 值补名字。
+
+**输入**：无。
+
+**输出**：无。
+
+**实现逻辑**：当前新版 MiniLLVM 路径中，命名主要已经在 `IRBuilder::insert()` 和 `Function::allocateLocalName()` 中完成。
+
+---
+
+# 4. Function 接口
+
+`Function` 表示函数级 IR 容器。
+
+## 4.1 `Function(std::string _name, FunctionType * _type, bool _builtin = false)`
+
+**功能**：创建函数对象。
+
+**输入**：函数名、函数类型、是否内置函数。
+
+**输出**：构造出 `Function`。
+
+**实现逻辑**：初始化 `GlobalValue`，缓存返回类型，保存内置标记。
+
+---
+
+## 4.2 `Type * getReturnType()`
+
+**功能**：获取返回类型。
+
+**输入**：无。
+
+**输出**：`Type *`。
+
+**实现逻辑**：返回 `returnType`。
+
+---
+
+## 4.3 `std::vector<FormalParam *> & getParams()`
+
+**功能**：获取形参列表。
+
+**输入**：无。
+
+**输出**：形参列表引用。
+
+**实现逻辑**：返回 `params`。`IRGenerator::ir_function_formal_params()` 会遍历它，为每个形参建立局部 alloca。
+
+---
+
+## 4.4 `bool isBuiltin()`
+
+**功能**：判断是否内置函数。
+
+**输入**：无。
+
+**输出**：`bool`。
+
+**实现逻辑**：返回 `builtIn`。
+
+---
+
+## 4.5 `void toString(std::string & str)`
+
+**功能**：输出函数文本 IR。
+
+**输入**：输出字符串引用。
+
+**输出**：无显式返回值。
+
+**实现逻辑**：如果是内置函数，不输出函数体；否则输出 `define ... { ... }`，并遍历基本块。
+
+---
+
+## 4.6 `BasicBlock * createBlock(const std::string & name = "")`
+
+**功能**：创建基本块。
+
+**输入**：基本块名字提示。
+
+**输出**：新建的 `BasicBlock *`。
+
+**实现逻辑**：名字为空则生成 `bbN`；清理非法字符；重名时追加后缀；创建 `BasicBlock` 并加入 `basicBlocks`。
+
+---
+
+## 4.7 `BasicBlock * getEntryBlock() const`
+
+**功能**：获取入口块。
+
+**输入**：无。
+
+**输出**：第一个基本块；没有则为 `nullptr`。
+
+**实现逻辑**：返回 `basicBlocks.front()`。
+
+---
+
+## 4.8 `const std::vector<BasicBlock *> & getBasicBlocks() const`
+
+**功能**：获取基本块列表。
+
+**输入**：无。
+
+**输出**：基本块列表引用。
+
+**实现逻辑**：返回 `basicBlocks`。
+
+---
+
+## 4.9 `std::string allocateLocalName(const std::string & hint = "")`
+
+**功能**：分配函数内唯一局部 IR 名字。
+
+**输入**：名字提示，例如 `addtmp`、`retval`、`a.addr`。
+
+**输出**：唯一名字，例如 `%addtmp`、`%addtmp.1`、`%0`。
+
+**实现逻辑**：如果 hint 为空，用计数器生成；否则补 `%` 前缀，清理非法字符，并通过 `usedLocalNames` 防止重名。
+
+---
+
+## 4.10 `int getMaxFuncCallArgCnt()` / `void setMaxFuncCallArgCnt(int count)`
+
+**功能**：记录函数内最大调用实参数量。
+
+**输入**：`set` 输入最大实参数量。
+
+**输出**：`get` 返回当前记录值。
+
+**实现逻辑**：读写 `maxFuncCallArgCnt`，主要服务后端调用约定和栈空间处理。
+
+---
+
+# 5. BasicBlock 接口
+
+`BasicBlock` 是控制流图节点，也是指令序列容器。
+
+## 5.1 `BasicBlock(Function * parent, std::string name)`
+
+**功能**：创建基本块。
+
+**输入**：所属函数、基本块名。
+
+**输出**：构造出 `BasicBlock`。
+
+**实现逻辑**：基本块本身是 `LabelType` 的 `Value`，保存父函数和名字。
+
+---
+
+## 5.2 `Function * getParent() const`
+
+**功能**：获取所属函数。
+
+**输入**：无。
+
+**输出**：`Function *`。
+
+**实现逻辑**：返回 `parent`。
+
+---
+
+## 5.3 `void appendInst(Instruction * inst)` / `void addInst(Instruction * inst)`
+
+**功能**：追加指令。
+
+**输入**：要追加的指令。
+
+**输出**：无。
+
+**实现逻辑**：如果指令为空或当前块已有 terminator，则不插入；否则加入 `instructions`。
+
+---
+
+## 5.4 `std::vector<Instruction *> & getInstructions()`
+
+**功能**：获取可修改指令列表。
+
+**输入**：无。
+
+**输出**：指令列表引用。
+
+**实现逻辑**：返回 `instructions`。`createEntryAlloca()` 直接使用这个接口把 alloca 插到入口块前部。
+
+---
+
+## 5.5 `Instruction * getTerminator() const`
+
+**功能**：获取终结指令。
+
+**输入**：无。
+
+**输出**：最后一条指令如果是 terminator，则返回它；否则返回 `nullptr`。
+
+**实现逻辑**：检查 `instructions.back()->isTerminator()`。
+
+---
+
+## 5.6 `bool hasTerminator() const`
+
+**功能**：判断块是否已经结束。
+
+**输入**：无。
+
+**输出**：`bool`。
+
+**实现逻辑**：返回 `getTerminator() != nullptr`。`IRBuilder::insert()` 依赖它防止在 `br` 或 `ret` 之后继续插指令。
+
+---
+
+## 5.7 `void toString(std::string & str) const`
+
+**功能**：输出基本块文本 IR。
+
+**输入**：输出字符串引用。
+
+**输出**：无显式返回值。
+
+**实现逻辑**：输出 `blockName:`，然后遍历指令并调用每条指令的 `toString()`。
+
+---
+
+# 6. IRBuilder 接口
+
+`IRBuilder` 是 `IRGenerator` 创建指令的主要入口。它保存当前插入点 `currentBlock`。
+
+## 6.1 `IRBuilder(Module * module)`
+
+**功能**：创建 Builder。
+
+**输入**：当前模块。
+
+**输出**：构造出 `IRBuilder`。
+
+**实现逻辑**：保存 `module`，当前插入块初始为空。
+
+---
+
+## 6.2 `void setInsertPoint(BasicBlock * block)`
+
+**功能**：设置插入点。
+
+**输入**：目标基本块。
+
+**输出**：无。
+
+**实现逻辑**：设置 `currentBlock = block`。
+
+---
+
+## 6.3 `BasicBlock * getInsertBlock() const`
+
+**功能**：获取当前插入块。
+
+**输入**：无。
+
+**输出**：`BasicBlock *`。
+
+**实现逻辑**：返回 `currentBlock`。
+
+---
+
+## 6.4 Builder 内部插入规则
+
+所有 `createXXX()` 都走统一插入逻辑：
+
+```text
+insert(inst, name)
+├── inst 为空 / currentBlock 为空 / currentBlock 已终结：删除 inst，返回 nullptr
+├── 如果 inst 有结果值：调用 currentFunction()->allocateLocalName(name)
+├── currentBlock->appendInst(inst)
+└── 返回 inst
+```
+
+---
+
+## 6.5 内存指令
+
+### `AllocaInst * createAlloca(Type * type, const std::string & name = "")`
+
+**功能**：创建 alloca。
+
+**输入**：被分配类型、名字提示。
+
+**输出**：`AllocaInst *`，结果是地址值。
+
+**实现逻辑**：构造 `AllocaInst`，名字通常使用 `name + ".addr"`，插入当前块。
+
+### `LoadInst * createLoad(Value * ptr, const std::string & name = "")`
+
+**功能**：从地址读取值。
+
+**输入**：指针值、结果名提示。
+
+**输出**：`LoadInst *`，指令本身是读取结果。
+
+**实现逻辑**：构造 `LoadInst(currentFunction(), ptr)` 并插入当前块。
+
+### `StoreInst * createStore(Value * value, Value * ptr)`
+
+**功能**：写内存。
+
+**输入**：要写入的值、目标地址。
+
+**输出**：`StoreInst *`，无结果值。
+
+**实现逻辑**：构造 `StoreInst(currentFunction(), value, ptr)` 并插入当前块。
+
+---
+
+## 6.6 算术指令
+
+### `createAdd` / `createSub` / `createMul` / `createSDiv` / `createSRem`
+
+**功能**：创建整数加、减、乘、有符号除、有符号取余。
+
+**输入**：
+
+| 类型 | 名称 | 含义 |
+|---|---|---|
+| `Value *` | `lhs` | 左右值 |
+| `Value *` | `rhs` | 右右值 |
+| `std::string` | `name` | 结果名提示 |
+
+**输出**：`BinaryInst *`。
+
+**实现逻辑**：用对应 `BinaryInst::Op` 构造二元指令并插入。
+
+---
+
+## 6.7 比较指令
+
+### `createICmpEQ` / `createICmpNE` / `createICmpSLT` / `createICmpSLE` / `createICmpSGT` / `createICmpSGE`
+
+**功能**：创建整数比较，结果通常是 `i1`。
+
+**输入**：左右操作数、结果名提示。
+
+**输出**：`ICmpInst *`。
+
+**实现逻辑**：用对应 `ICmpInst::Predicate` 构造比较指令并插入。
+
+---
+
+## 6.8 类型转换
+
+### `ZExtInst * createZExt(Value * value, Type * targetType, const std::string & name = "")`
+
+**功能**：零扩展，例如把 `i1` 扩展成 `i32`。
+
+**输入**：原值、目标类型、结果名提示。
+
+**输出**：`ZExtInst *`。
+
+**实现逻辑**：构造 `ZExtInst` 并插入当前块。
+
+---
+
+## 6.9 地址计算
+
+### `GetElementPtrInst * createGEP(Value * basePtr, const std::vector<Value *> & indices, const std::string & name = "")`
+
+**功能**：根据基址和索引计算元素地址。
+
+**输入**：基地址、索引列表、结果名提示。
+
+**输出**：`GetElementPtrInst *`。
+
+**实现逻辑**：构造 GEP 指令并插入当前块。
+
+---
+
+## 6.10 函数调用
+
+### `CallInst * createCall(Function * callee, const std::vector<Value *> & args, const std::string & name = "")`
+
+**功能**：创建函数调用。
+
+**输入**：被调函数、实参右值列表、结果名提示。
+
+**输出**：`CallInst *`；非 void 调用本身是返回值。
+
+**实现逻辑**：用 `callee->getReturnType()` 作为结果类型，构造 call 指令并插入。
+
+---
+
+## 6.11 Phi
+
+### `PhiInst * createPhi(Type * type, const std::string & name = "")`
+
+**功能**：创建 phi 指令。
+
+**输入**：结果类型、名字提示。
+
+**输出**：`PhiInst *`。
+
+**实现逻辑**：构造 `PhiInst` 并插入。当前变量生成主路径是 memory-based，phi 更多为后续 SSA 化或优化预留。
+
+---
+
+## 6.12 控制流
+
+### `BranchInst * createBr(BasicBlock * target)`
+
+**功能**：创建无条件跳转。
+
+**输入**：目标基本块。
+
+**输出**：`BranchInst *`，terminator。
+
+**实现逻辑**：构造无条件 `BranchInst` 并插入当前块。
+
+### `BranchInst * createCondBr(Value * cond, BasicBlock * trueBlock, BasicBlock * falseBlock)`
+
+**功能**：创建条件跳转。
+
+**输入**：`i1` 条件值、真分支块、假分支块。
+
+**输出**：`BranchInst *`，terminator。
+
+**实现逻辑**：构造条件 `BranchInst` 并插入当前块。
+
+---
+
+## 6.13 返回
+
+### `ReturnInst * createRet(Value * value)`
+
+**功能**：创建带返回值的 `ret`。
+
+**输入**：返回值。
+
+**输出**：`ReturnInst *`，terminator。
+
+**实现逻辑**：构造 `ReturnInst(currentFunction(), value)` 并插入。
+
+### `ReturnInst * createRetVoid()`
+
+**功能**：创建 `ret void`。
+
+**输入**：无。
+
+**输出**：`ReturnInst *`，terminator。
+
+**实现逻辑**：构造无返回值 ReturnInst 并插入。
+
+---
+
+# 7. Value / User / Use 接口
+
+## 7.1 Value
+
+### `getName()` / `setName()`
+
+**功能**：读写源码级名字。
+
+**输入**：`setName` 输入名字。
+
+**输出**：`getName` 返回名字。
+
+**实现逻辑**：读写 `name` 字段。
+
+### `getIRName()` / `setIRName()`
+
+**功能**：读写文本 IR 名字。
+
+**输入**：`setIRName` 输入 IR 名字。
+
+**输出**：`getIRName` 返回 IR 名字。
+
+**实现逻辑**：读写 `IRName` 字段。
+
+### `Type * getType()`
+
+**功能**：获取值类型。
+
+**输入**：无。
+
+**输出**：`Type *`。
+
+**实现逻辑**：返回 `type` 字段。
+
+### `setConstValue(bool isConst = true)` / `isConstValue()`
+
+**功能**：记录并查询该 `Value` 是否对应源语言中的 `const` 变量。
+
+**输入**：
+
+| 类型 | 名称 | 含义 |
+|---|---|---|
+| `bool` | `isConst` | 是否为 const，默认标记为 true |
+
+**输出**：
+
+| 类型 | 名称 | 含义 |
+|---|---|---|
+| `bool` | `isConstValue()` 返回值 | 当前值是否是 const 变量对应的地址 |
+
+**实现逻辑**：读写 `Value` 基类中的 `constValue` 字段。当前 memory-based lowering 中，变量名绑定到 `AllocaInst` 或 `GlobalVariable` 这类地址值，因此把 const 属性挂在该地址 `Value` 上，赋值时检查左值地址即可。
+
+### `addUse()` / `removeUse()` / `removeUses()`
+
+**功能**：维护被使用列表。
+
+**输入**：`Use *`。
+
+**输出**：无。
+
+**实现逻辑**：增删 `uses` 列表。
+
+### `replaceAllUseWith(Value * new_val)`
+
+**功能**：把所有使用当前值的地方替换为新值。
+
+**输入**：新值。
+
+**输出**：无。
+
+**实现逻辑**：遍历 use 列表，调用 use 的替换逻辑。优化阶段会非常依赖这个接口。
+
+---
+
+## 7.2 User
+
+`User` 是使用其他 Value 的 Value，典型子类是 Instruction。
+
+### `getOperands()`
+
+**功能**：获取 `Use *` 操作数列表。
+
+**输出**：`std::vector<Use *> &`。
+
+### `getOperandsValue()`
+
+**功能**：获取操作数对应的 `Value *` 列表。
+
+**输出**：`std::vector<Value *>`。
+
+### `getOperandsNum()`
+
+**功能**：获取操作数数量。
+
+**输出**：`int32_t`。
+
+### `getOperand(int32_t pos)`
+
+**功能**：获取指定位置操作数。
+
+**输入**：下标。
+
+**输出**：`Value *`。
+
+### `setOperand(int32_t pos, Value * val)`
+
+**功能**：替换指定位置操作数。
+
+**输入**：下标、新值。
+
+**输出**：无。
+
+**实现逻辑**：通过 `Use::setUsee()` 维护旧值和新值的 use 列表。
+
+### `addOperand(Value * val)`
+
+**功能**：增加操作数。
+
+**输入**：被使用的值。
+
+**输出**：无。
+
+**实现逻辑**：创建 `Use(val, this)`，加入 operands，并调用 `val->addUse(use)`。
+
+### `removeOperand(...)` / `clearOperands()` / `replaceOperand(Value * val, Value * newVal)`
+
+**功能**：删除、清空、替换操作数。
+
+**实现逻辑**：通过 `Use::remove()` 和 `Use::setUsee()` 同步维护双向关系。
+
+---
+
+## 7.3 Use
+
+### `Use(Value * _value, User * _user)`
+
+**功能**：构造 def-use 边。
+
+**输入**：被使用值、使用者。
+
+**输出**：构造出 Use。
+
+**注意**：构造函数不会自动插入 `Value::uses` 或 `User::operands`，通常应通过 `User::addOperand()` 使用。
+
+### `User * getUser() const`
+
+**功能**：获取使用者。
+
+**输出**：`User *`。
+
+### `Value * getUsee() const`
+
+**功能**：获取被使用值。
+
+**输出**：`Value *`。
+
+### `void setUsee(Value * newVal)`
+
+**功能**：把 Use 指向新值。
+
+**输入**：新值。
+
+**输出**：无。
+
+**实现逻辑**：从旧值 use 列表删除，再加入新值 use 列表。
+
+### `void remove()`
+
+**功能**：断开 def-use 边。
+
+**输出**：无。
+
+**实现逻辑**：从 user 和 usee 两侧移除引用。
+
+---
+
+# 8. Type 接口
+
+`Type` 是类型基类，支持 `FloatTyID`、`VoidTyID`、`LabelTyID`、`TokenTyID`、`IntegerTyID`、`FunctionTyID`、`PointerTyID`、`ArrayTyID`。
+
+## 8.1 类型判断
+
+### `isVoidType()` / `isLabelType()` / `isFunctionType()` / `isIntegerType()` / `isPointerType()` / `isArrayType()`
+
+**功能**：判断类型种类。
+
+**输入**：无。
+
+**输出**：`bool`。
+
+**实现逻辑**：比较内部 `TypeID`。
+
+## 8.2 `toString()`
+
+**功能**：输出类型文本。
+
+**输入**：无。
+
+**输出**：例如 `i32`、`i1`、`void`、`label`、`i32*`。
+
+**实现逻辑**：由具体子类实现。
+
+## 8.3 `getSize()`
+
+**功能**：获取类型大小。
+
+**输入**：无。
+
+**输出**：大小数值。
+
+**实现逻辑**：由具体类型决定，后端分配空间时使用。
+
+## 8.4 常见类型类
+
+| 类型类 | 功能 | 用途 |
+|---|---|---|
+| `IntegerType` | 整数类型，如 `i32`、`i1` | 变量、表达式、条件 |
+| `VoidType` | void | void 函数 |
+| `LabelType` | label | 基本块 |
+| `PointerType` | 指针 | alloca、global、load/store、GEP |
+| `ArrayType` | 数组 | 数组变量和元素访问 |
+| `FunctionType` | 函数签名 | Function 类型 |
+
+---
+
+# 9. Instruction 接口
+
+`Instruction` 继承自 `User`，因此每条指令既能使用操作数，也能作为值被使用。
+
+## 9.1 `Instruction(Function * _func, Type * _type)`
+
+**功能**：创建指令基类部分。
+
+**输入**：所属函数、结果类型。
+
+**输出**：构造出指令。
+
+**实现逻辑**：初始化 `User(_type)`，记录所属函数。
+
+## 9.2 `virtual void toString(std::string & str)`
+
+**功能**：输出指令文本。
+
+**输入**：输出字符串引用。
+
+**输出**：无显式返回值。
+
+**实现逻辑**：具体指令类重写。
+
+## 9.3 `bool hasResultValue()`
+
+**功能**：判断指令是否产生结果值。
+
+**输入**：无。
+
+**输出**：`bool`。
+
+**实现逻辑**：void 类型指令通常无结果；非 void 指令需要 IRName。
+
+## 9.4 `virtual bool isTerminator() const`
+
+**功能**：判断是否是基本块终结指令。
+
+**输入**：无。
+
+**输出**：`bool`。
+
+**实现逻辑**：基类默认 false；`BranchInst`、`ReturnInst` 为 true。
+
+## 9.5 `isDead()` / `setDead()`
+
+**功能**：读写死指令标记。
+
+**输入**：是否 dead。
+
+**输出**：`isDead()` 返回 `bool`。
+
+**实现逻辑**：维护 dead 标志，供优化或清理使用。
+
+---
+
+# 10. 具体指令类
+
+这些类一般由 `IRBuilder` 间接创建。
+
+| 指令类 | 功能 | 输入 | 输出 |
+|---|---|---|---|
+| `AllocaInst` | 分配局部槽位 | 函数、被分配类型、名字 | 地址值 |
+| `LoadInst` | 从地址读取值 | 函数、指针 | 读取结果 |
+| `StoreInst` | 写地址 | 函数、值、指针 | void |
+| `BinaryInst` | 算术运算 | op、lhs、rhs | 运算结果 |
+| `ICmpInst` | 整数比较 | predicate、lhs、rhs | i1 |
+| `ZExtInst` | 零扩展 | value、target type | 扩展结果 |
+| `GetElementPtrInst` | 地址计算 | basePtr、indices | 地址值 |
+| `CallInst` | 函数调用 | callee、args | 返回值或 void |
+| `PhiInst` | SSA 合流 | type、incoming | 合流结果 |
+| `BranchInst` | 跳转 | target 或 cond+targets | terminator |
+| `ReturnInst` | 返回 | 可选返回值 | terminator |
+
+---
+
+# 11. IRGenerator 内部辅助接口
+
+这些不是 IR 库公共接口，但它们解释了 AST 与 IR 库之间的衔接。
+
+## 11.1 `Value * emitRValue(Value * value, const std::string & name = "")`
+
+**功能**：把可能是左值地址的值变成右值。
+
+**输入**：待转换值、名字提示。
+
+**输出**：右值。
+
+**实现逻辑**：
+
+```text
+value == nullptr          -> nullptr
+value 是 ConstInt         -> 原样返回
+value 是 GlobalVariable   -> builder.createLoad(value, name)
+value 的类型是 PointerType -> builder.createLoad(value, name)
+其他情况                 -> 原样返回
+```
+
+---
+
+## 11.2 `Value * emitCondValue(Value * value)`
+
+**功能**：把表达式值规范化为条件跳转可用的 `i1`。
+
+**输入**：表达式值。
+
+**输出**：`i1` 条件值。
+
+**实现逻辑**：先 `emitRValue(value, "cond")`；如果已经是 `i1`，直接返回；否则生成 `icmp ne value, 0`。
+
+---
+
+## 11.3 `AllocaInst * createEntryAlloca(Function * func, Type * type, const std::string & name)`
+
+**功能**：在函数入口块前部创建 alloca。
+
+**输入**：函数、类型、变量名。
+
+**输出**：`AllocaInst *`。
+
+**实现逻辑**：
+
+```text
+entry = func->getEntryBlock()
+如果 entry 不存在：func->createBlock("entry")
+new AllocaInst(func, type)
+设置 name 和 IRName
+找到 entry 中连续 alloca 之后的位置
+插入新 alloca
+返回 alloca
+```
+
+**意义**：把所有局部变量槽位集中在 entry 块开头，便于后续 SSA 化或 mem2reg。
+
+---
+
+# 12. 典型 AST 节点翻译方式
+
+## 12.1 编译单元
+
+```text
+ir_compile_unit()
+├── module->setCurrentFunction(nullptr)
+├── 预声明所有函数
+├── 翻译全局变量
+└── 翻译函数体
+```
+
+## 12.2 函数
+
+```text
+ir_function_define()
+├── 检查不允许嵌套函数
+├── 确保函数已预声明
+└── ir_function_body()
+```
+
+函数体中创建 entry block，设置 builder 插入点，进入作用域，翻译形参和语句块。
+
+## 12.3 形参
+
+```text
+for param in currentFunc->getParams():
+    local = createEntryAlloca(currentFunc, param->getType(), param->getName())
+    module->bindValue(param->getName(), local)
+    builder.createStore(param, local)
+```
+
+## 12.4 标识符
+
+```text
+val = module->lookupValue(name)
+node->val = val
+```
+
+注意：这个 `val` 通常是地址，需要参与运算时再 `emitRValue()`。
+
+## 12.5 字面量
+
+```text
+node->val = module->newConstInt(integer_val)
+```
+
+## 12.6 二元表达式
+
+```text
+left = ir_visit_ast_node(lhs)
+right = ir_visit_ast_node(rhs)
+lhsVal = emitRValue(left->val)
+rhsVal = emitRValue(right->val)
+node->val = builder.createAdd/Sub/Mul/SDiv/SRem(...)
+```
+
+关系运算一般是：
+
+```text
+icmp -> i1
+zext -> i32 0/1
+```
+
+## 12.7 赋值
+
+```text
+left = ir_visit_ast_node(lhs)     // 地址
+如果 left->val 是 constValue，报 E1303
+right = ir_visit_ast_node(rhs)
+value = emitRValue(right->val)
+builder.createStore(value, left->val)
+node->val = value
+```
+
+## 12.7.1 常量声明
+
+```text
+AST_OP_CONST_DECL -> ir_const_declaration()
+ir_const_declaration() 先标记 node->isConst = true
+再复用 ir_variable_declare()
+```
+
+局部常量仍然按变量槽位生成：
+
+```text
+addr = createEntryAlloca(type, name)
+addr->setConstValue(true)
+builder.createStore(initValue, addr)
+```
+
+全局常量当前也复用 `GlobalVariable` 的存储形式：
+
+```text
+global = module->newVarValue(type, name)
+global->setConstValue(true)
+global->setInitializer(initValue)
+```
+
+语义约束：
+
+```text
+const 声明没有初始化值 -> E1304
+对 const 左值重新赋值 -> E1303
+```
+
+## 12.8 return
+
+```text
+如果有表达式：
+    retVal = emitRValue(expr->val)
+    builder.createRet(retVal)
+否则：
+    builder.createRetVoid()
+```
+
+## 12.9 if
+
+```text
+condbr cond, thenBlock, elseBlock/endBlock
+
+thenBlock:
+    then body
+    br endBlock   // 如果没有 terminator
+
+elseBlock:
+    else body
+    br endBlock   // 如果存在 else 且没有 terminator
+
+endBlock:
+    后续代码
+```
+
+关键接口：`createBlock()`、`emitCondValue()`、`createCondBr()`、`hasTerminator()`、`createBr()`。
+
+## 12.10 while / break / continue
+
+```text
+br condBlock
+
+condBlock:
+    condbr cond, bodyBlock, endBlock
+
+bodyBlock:
+    body
+    br condBlock
+
+endBlock:
+    后续代码
+```
+
+循环上下文：
+
+```text
+loopTargets.push_back({condBlock, endBlock})
+continue -> br condBlock
+break    -> br endBlock
+loopTargets.pop_back()
+```
+
+## 12.11 逻辑与 / 逻辑或
+
+短路逻辑不用普通二元指令，而是生成基本块和条件跳转。
+
+`&&`：
+
+```text
+result = alloca i32
+store 0, result
+left false -> end
+right false -> end
+trueBlock: store 1, result
+end: load result
+```
+
+`||`：
+
+```text
+result = alloca i32
+store 1, result
+left true -> end
+right true -> end
+falseBlock: store 0, result
+end: load result
+```
+
+---
+
+# 13. 扩展 IR 库时的建议
+
+## 13.1 新表达式
+
+```text
+新增或复用 Instruction
+在 IRBuilder 增加 createXXX()
+在 IRGenerator handler 中调用 builder
+```
+
+## 13.2 新控制流
+
+```text
+Function::createBlock()
+builder.setInsertPoint()
+emitCondValue()
+builder.createCondBr() / createBr()
+BasicBlock::hasTerminator()
+```
+
+## 13.3 新变量形态，如数组
+
+```text
+扩展 Type
+左值阶段生成地址，例如 createGEP()
+右值阶段 emitRValue() 生成 load
+赋值阶段 createStore()
+```
+
+## 13.4 优化
+
+```text
+遍历 Function / BasicBlock / Instruction
+依赖 Value/User/Use 的 def-use 链
+使用 replaceAllUseWith() 替换值
+使用 dead 标记或删除接口清理指令
+```
+
+---
+
+# 14. 总结
+
+这套 IR 的调用主线是：
+
+```text
+AST
+-> IRGenerator 分发 AST 节点
+-> Module 管理全局上下文和符号
+-> Function 创建函数与基本块
+-> BasicBlock 容纳顺序指令
+-> IRBuilder 创建并插入指令
+-> Value/User/Use 串起数据流
+-> Branch/Return 串起控制流
+-> toString/toIRString 输出文本 IR
+```
+
+一句话概括：**IR 层是库，`IRGenerator` 是调用者；`IRBuilder` 是造指令的门面；`Module/Function/BasicBlock` 是组织结构；`Value/User/Use` 是数据流骨架；当前变量生成采用 memory-based lowering，表达式和控制流采用 LLVM-like CFG。**

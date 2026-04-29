@@ -1,3 +1,5 @@
+// 类型的基类，描述所有的类型
+
 #pragma once
 
 #include <string>

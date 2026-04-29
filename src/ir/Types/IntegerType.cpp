@@ -1,3 +1,5 @@
+// 整型类型类，可描述1位的bool类型或32位的int类型
+
 #include "IntegerType.h"
 
 ///

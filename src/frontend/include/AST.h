@@ -7,7 +7,6 @@
 #include <vector>
 
 #include "AttrType.h"
-#include "ir/include/IRCode.h"
 #include "ir/include/Value.h"
 #include "ir/Types/VoidType.h"
 
@@ -305,10 +304,7 @@ public:
 	// 孩子节点
 	std::vector<ast_node *> sons;
 
-	// 线性IR指令块，可包含多条IR指令，用于线性IR指令产生用
-	InterCode blockInsts;
-
-	// 线性IR指令或者运行产生的Value，用于线性IR指令产生用
+	// MiniLLVM IR生成过程中绑定到该AST节点的Value
 	Value * val = nullptr;
 
 	///

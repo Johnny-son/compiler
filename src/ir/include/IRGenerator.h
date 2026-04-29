@@ -6,7 +6,23 @@
 
 #include "frontend/include/AST.h"
 #include "Module.h"
+#include "IRBuilder.h"
 
+class BasicBlock;
+
+enum class BinaryEmitOp {
+	Add,
+	Sub,
+	Mul,
+	Div,
+	Mod,
+	Eq,
+	Ne,
+	Lt,
+	Le,
+	Gt,
+	Ge
+};
 
 class IRGenerator {
 public:
@@ -102,10 +118,11 @@ protected:
 	bool ir_function_body(ast_node * node);
 
 	// 通用二元AST节点翻译成线性中间IR
-	bool ir_binary(ast_node * node, IRInstOperator op);
+	bool ir_binary(ast_node * node, BinaryEmitOp op);
 
-	// 判断一段IR是否已经以终结指令结束
-	bool block_ends_with_terminator(const InterCode & code) const;
+	Value * emitRValue(Value * value, const std::string & name = "");
+	Value * emitCondValue(Value * value);
+	AllocaInst * createEntryAlloca(Function * func, Type * type, const std::string & name);
 
 	// 未知节点类型的节点处理
 	bool ir_default(ast_node * node);
@@ -127,6 +144,8 @@ private:
 	// 符号表:模块
 	Module * module;
 
+	IRBuilder builder;
+
 	// 循环上下文，first为continue目标，second为break目标
-	std::vector<std::pair<Instruction *, Instruction *>> loopTargets;
+	std::vector<std::pair<BasicBlock *, BasicBlock *>> loopTargets;
 };

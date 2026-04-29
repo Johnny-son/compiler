@@ -23,6 +23,9 @@ public:
 	// 缺省的析构函数
 	virtual ~Module() = default;
 
+	// 输出LLVM IR代码字符串
+	std::string toString() const;
+
 	// 输出IR代码, 返回 std::string IR代码字符串
 	std::string toIRString();
 
@@ -54,8 +57,19 @@ public:
 	Function *
 	newFunction(std::string name, Type * returnType, std::vector<FormalParam *> params = {}, bool builtin = false);
 
+	Function *
+	createFunction(const std::string & name, Type * returnType, std::vector<FormalParam *> params = {}, bool builtin = false)
+	{
+		return newFunction(name, returnType, std::move(params), builtin);
+	}
+
 	// 根据函数名查找函数信息
 	Function * findFunction(std::string name);
+
+	Function * getFunction(const std::string & name)
+	{
+		return findFunction(name);
+	}
 
 	// 获取全局变量列表，用于外部遍历全局变量
 	std::vector<GlobalVariable *> & getGlobalVariables()
@@ -73,20 +87,24 @@ public:
 	ConstInt * newConstInt(int32_t intVal);
 
 	// 新建变量型Value，会根据currentFunc的值进行判断创建全局或者局部变量
-	// ! 该函数只有在AST遍历生成线性IR中使用，其它地方不能使用
+	// ! 该函数只有在AST遍历生成MiniLLVM IR中使用，其它地方不能使用
 	// lineno: 当前变量定义所在的行号，用于错误信息；传入 -1 表示无有效行号
 	Value * newVarValue(Type * type, const std::string & name = "", int64_t lineno = -1);
 
 	// 查找变量（全局变量或局部变量），会根据作用域栈进行逐级查找。
-	/// ! 该函数只有在AST遍历生成线性IR中使用，其它地方不能使用
+	/// ! 该函数只有在AST遍历生成MiniLLVM IR中使用，其它地方不能使用
 	///  name 变量ID
 	/// return 指针有效则找到，空指针未找到
 	Value * findVarValue(std::string name);
 
+	bool bindValue(const std::string & name, Value * value, int64_t lineno = -1);
+
+	Value * lookupValue(const std::string & name) const;
+
 	// 清理Module中管理的所有信息资源
 	void Delete();
 
-	// 输出线性IR指令列表
+	// 输出LLVM IR文本
 	void outputIR(const std::string & filePath);
 
 	// 对IR指令中没有名字的全部命名
@@ -98,6 +116,11 @@ protected:
 
 	// 新建全局变量，要求 name 必须有效，并且加入到全局符号表中。
 	GlobalVariable * newGlobalVariable(Type * type, std::string name);
+
+	GlobalVariable * createGlobalVariable(Type * type, const std::string & name)
+	{
+		return newGlobalVariable(type, name);
+	}
 
 	// 根据变量名获取当前符号（只管理全局变量）
 	GlobalVariable * findGlobalVariable(std::string name);

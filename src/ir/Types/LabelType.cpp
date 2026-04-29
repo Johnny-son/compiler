@@ -1,3 +1,5 @@
+// Label名称符号类
+
 #include "LabelType.h"
 
 ///

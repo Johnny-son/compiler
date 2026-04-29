@@ -1,3 +1,6 @@
+// 函数类型类，主要有函数返回值类型以及各个形参类型组成
+
+
 #pragma once
 
 #include <string>

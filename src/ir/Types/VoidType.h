@@ -1,3 +1,5 @@
+// void类型描述类
+
 #pragma once
 
 #include "Type.h"

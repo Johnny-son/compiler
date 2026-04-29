@@ -1,7 +1,8 @@
+// int类型的常量
+
 #pragma once
 
 #include "Constant.h"
-#include "IRConstant.h"
 #include "ir/Types/IntegerType.h"
 
 ///

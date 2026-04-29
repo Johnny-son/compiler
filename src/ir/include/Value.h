@@ -1,3 +1,5 @@
+// 值操作类型，所有的变量、函数、常量都是Value
+
 #pragma once
 
 #include <cstdint>
@@ -27,15 +29,13 @@ protected:
 	/// @brief 类型
 	Type * type;
 
+	/// @brief 是否为源语言中的const变量
+	bool constValue = false;
+
 	///
 	/// @brief define-use链，这个定值被使用的所有边，即所有的User
 	///
 	std::vector<Use *> uses;
-
-	///
-	/// @brief 常量标志
-	///
-	bool isConstFlag = false;
 
 public:
 	/// @brief 构造函数
@@ -77,6 +77,12 @@ public:
 	/// @brief 获取类型
 	/// @return 变量名
 	virtual Type * getType();
+
+	/// @brief 标记该值是否对应源语言const变量
+	void setConstValue(bool isConst = true);
+
+	/// @brief 是否对应源语言const变量
+	[[nodiscard]] bool isConstValue() const;
 
 	///
 	/// @brief 增加一条边，增加Value被使用次数
@@ -133,17 +139,4 @@ public:
 	/// @return int32_t 寄存器编号
 	///
 	virtual void setLoadRegId(int32_t regId);
-
-	///
-	/// @brief 设置常量标志
-	/// @param isConst 是否为常量
-	///
-	virtual void setConst(bool isConst);
-
-	///
-	/// @brief 获取常量标志
-	/// @return true 是常量
-	/// @return false 不是常量
-	///
-	[[nodiscard]] virtual bool isConst() const;
 };

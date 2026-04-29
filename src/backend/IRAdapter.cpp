@@ -2,18 +2,26 @@
 
 #include <string>
 
+#include "BasicBlock.h"
 #include "ir/include/Function.h"
 #include "ir/include/Instruction.h"
 #include "ir/include/Module.h"
 #include "ir/include/Type.h"
 #include "ir/include/Value.h"
-#include "ir/Instructions/FuncCallInstruction.h"
-#include "ir/Instructions/GotoInstruction.h"
+#include "ir/Instructions/AllocaInst.h"
+#include "ir/Instructions/BinaryInst.h"
+#include "ir/Instructions/BranchInst.h"
+#include "ir/Instructions/CallInst.h"
+#include "ir/Instructions/GetElementPtrInst.h"
+#include "ir/Instructions/ICmpInst.h"
+#include "ir/Instructions/LoadInst.h"
+#include "ir/Instructions/PhiInst.h"
+#include "ir/Instructions/ReturnInst.h"
+#include "ir/Instructions/StoreInst.h"
+#include "ir/Instructions/ZExtInst.h"
 #include "ir/Values/ConstInt.h"
 #include "ir/Values/FormalParam.h"
 #include "ir/Values/GlobalVariable.h"
-#include "ir/Values/LocalVariable.h"
-#include "ir/Values/MemVariable.h"
 
 namespace {
 
@@ -39,14 +47,6 @@ IRValueKind classifyValue(Value * value)
 		return IRValueKind::FormalParam;
 	}
 
-	if (dynamic_cast<LocalVariable *>(value) != nullptr) {
-		return IRValueKind::LocalVariable;
-	}
-
-	if (dynamic_cast<MemVariable *>(value) != nullptr) {
-		return IRValueKind::MemoryVariable;
-	}
-
 	if (dynamic_cast<Instruction *>(value) != nullptr) {
 		return IRValueKind::InstructionResult;
 	}
@@ -60,34 +60,41 @@ IRInstKind classifyInstruction(Instruction * inst)
 		return IRInstKind::Invalid;
 	}
 
-	switch (inst->getOp()) {
-		case IRInstOperator::IRINST_OP_ENTRY:
-			return IRInstKind::Entry;
-		case IRInstOperator::IRINST_OP_EXIT:
-			return IRInstKind::Exit;
-		case IRInstOperator::IRINST_OP_LABEL:
-			return IRInstKind::Label;
-		case IRInstOperator::IRINST_OP_GOTO:
-			return IRInstKind::Goto;
-		case IRInstOperator::IRINST_OP_ADD_I:
-			return IRInstKind::Add;
-		case IRInstOperator::IRINST_OP_SUB_I:
-			return IRInstKind::Sub;
-		case IRInstOperator::IRINST_OP_MUL_I:
-			return IRInstKind::Mul;
-		case IRInstOperator::IRINST_OP_DIV_I:
-			return IRInstKind::Div;
-		case IRInstOperator::IRINST_OP_MOD_I:
-			return IRInstKind::Mod;
-		case IRInstOperator::IRINST_OP_ASSIGN:
-			return IRInstKind::Assign;
-		case IRInstOperator::IRINST_OP_FUNC_CALL:
-			return IRInstKind::FuncCall;
-		case IRInstOperator::IRINST_OP_ARG:
-			return IRInstKind::Arg;
-		default:
-			return IRInstKind::Unknown;
+	if (dynamic_cast<AllocaInst *>(inst) != nullptr) {
+		return IRInstKind::Alloca;
 	}
+	if (dynamic_cast<LoadInst *>(inst) != nullptr) {
+		return IRInstKind::Load;
+	}
+	if (dynamic_cast<StoreInst *>(inst) != nullptr) {
+		return IRInstKind::Store;
+	}
+	if (dynamic_cast<BinaryInst *>(inst) != nullptr) {
+		return IRInstKind::Binary;
+	}
+	if (dynamic_cast<ICmpInst *>(inst) != nullptr) {
+		return IRInstKind::ICmp;
+	}
+	if (dynamic_cast<ZExtInst *>(inst) != nullptr) {
+		return IRInstKind::ZExt;
+	}
+	if (dynamic_cast<GetElementPtrInst *>(inst) != nullptr) {
+		return IRInstKind::GetElementPtr;
+	}
+	if (dynamic_cast<CallInst *>(inst) != nullptr) {
+		return IRInstKind::Call;
+	}
+	if (dynamic_cast<PhiInst *>(inst) != nullptr) {
+		return IRInstKind::Phi;
+	}
+	if (dynamic_cast<BranchInst *>(inst) != nullptr) {
+		return IRInstKind::Branch;
+	}
+	if (dynamic_cast<ReturnInst *>(inst) != nullptr) {
+		return IRInstKind::Return;
+	}
+
+	return IRInstKind::Unknown;
 }
 
 } // namespace
@@ -133,16 +140,6 @@ bool IRValueView::isFunction() const
 bool IRValueView::isFormalParam() const
 {
 	return kind() == IRValueKind::FormalParam;
-}
-
-bool IRValueView::isLocalVariable() const
-{
-	return kind() == IRValueKind::LocalVariable;
-}
-
-bool IRValueView::isMemoryVariable() const
-{
-	return kind() == IRValueKind::MemoryVariable;
 }
 
 bool IRValueView::isInstructionResult() const
@@ -235,20 +232,77 @@ std::vector<IRValueView> IRInstView::operands() const
 
 Function * IRInstView::calledFunctionRaw() const
 {
-	auto * callInst = dynamic_cast<FuncCallInstruction *>(inst);
-	return callInst != nullptr ? callInst->calledFunction : nullptr;
+	auto * callInst = dynamic_cast<CallInst *>(inst);
+	return callInst != nullptr ? callInst->getCallee() : nullptr;
 }
 
 std::string IRInstView::calledFunctionName() const
 {
-	auto * callInst = dynamic_cast<FuncCallInstruction *>(inst);
-	return callInst != nullptr ? callInst->getCalledName() : "";
+	Function * callee = calledFunctionRaw();
+	return callee != nullptr ? callee->getName() : "";
 }
 
-LabelInstruction * IRInstView::targetLabelRaw() const
+bool IRInstView::isConditionalBranch() const
 {
-	auto * gotoInst = dynamic_cast<GotoInstruction *>(inst);
-	return gotoInst != nullptr ? gotoInst->getTarget() : nullptr;
+	auto * branchInst = dynamic_cast<BranchInst *>(inst);
+	return branchInst != nullptr && branchInst->isConditional();
+}
+
+BasicBlock * IRInstView::targetBlockRaw() const
+{
+	auto * branchInst = dynamic_cast<BranchInst *>(inst);
+	return branchInst != nullptr ? branchInst->getTarget() : nullptr;
+}
+
+BasicBlock * IRInstView::trueBlockRaw() const
+{
+	auto * branchInst = dynamic_cast<BranchInst *>(inst);
+	return branchInst != nullptr ? branchInst->getTrueTarget() : nullptr;
+}
+
+BasicBlock * IRInstView::falseBlockRaw() const
+{
+	auto * branchInst = dynamic_cast<BranchInst *>(inst);
+	return branchInst != nullptr ? branchInst->getFalseTarget() : nullptr;
+}
+
+IRBasicBlockView::IRBasicBlockView(BasicBlock * block) : block(block)
+{}
+
+bool IRBasicBlockView::valid() const
+{
+	return block != nullptr;
+}
+
+BasicBlock * IRBasicBlockView::raw() const
+{
+	return block;
+}
+
+std::string IRBasicBlockView::name() const
+{
+	return block != nullptr ? block->getName() : "";
+}
+
+std::string IRBasicBlockView::irName() const
+{
+	return block != nullptr ? block->getIRName() : "";
+}
+
+std::vector<IRInstView> IRBasicBlockView::instructions() const
+{
+	std::vector<IRInstView> result;
+	if (block == nullptr) {
+		return result;
+	}
+
+	auto & insts = block->getInstructions();
+	result.reserve(insts.size());
+	for (auto * inst: insts) {
+		result.emplace_back(inst);
+	}
+
+	return result;
 }
 
 IRFunctionView::IRFunctionView(Function * func) : func(func)
@@ -300,17 +354,17 @@ std::vector<IRValueView> IRFunctionView::params() const
 	return result;
 }
 
-std::vector<IRValueView> IRFunctionView::locals() const
+std::vector<IRBasicBlockView> IRFunctionView::blocks() const
 {
-	std::vector<IRValueView> result;
+	std::vector<IRBasicBlockView> result;
 	if (func == nullptr) {
 		return result;
 	}
 
-	auto & locals = func->getVarValues();
-	result.reserve(locals.size());
-	for (auto * local: locals) {
-		result.emplace_back(local);
+	auto & blocks = func->getBasicBlocks();
+	result.reserve(blocks.size());
+	for (auto * block: blocks) {
+		result.emplace_back(block);
 	}
 
 	return result;
@@ -323,10 +377,12 @@ std::vector<IRInstView> IRFunctionView::instructions() const
 		return result;
 	}
 
-	auto & insts = func->getInterCode().getInsts();
-	result.reserve(insts.size());
-	for (auto * inst: insts) {
-		result.emplace_back(inst);
+	for (auto * block: func->getBasicBlocks()) {
+		auto & insts = block->getInstructions();
+		result.reserve(result.size() + insts.size());
+		for (auto * inst: insts) {
+			result.emplace_back(inst);
+		}
 	}
 
 	return result;

@@ -1,3 +1,5 @@
+// 值操作类型，所有的变量、函数、常量都是Value
+
 #include <algorithm>
 
 #include "Value.h"
@@ -54,6 +56,18 @@ void Value::setIRName(std::string _name)
 Type * Value::getType()
 {
 	return type;
+}
+
+/// @brief 标记该值是否对应源语言const变量
+void Value::setConstValue(bool isConst)
+{
+	constValue = isConst;
+}
+
+/// @brief 是否对应源语言const变量
+bool Value::isConstValue() const
+{
+	return constValue;
 }
 
 ///
@@ -142,16 +156,6 @@ int32_t Value::getLoadRegId()
 void Value::setLoadRegId(int32_t regId)
 {
 	(void) regId;
-}
-
-void Value::setConst(bool isConst)
-{
-	this->isConstFlag = isConst;
-}
-
-bool Value::isConst() const
-{
-	return isConstFlag;
 }
 
 ///

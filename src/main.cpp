@@ -13,10 +13,10 @@ using namespace std;
 
 // 参数配置
 static bool gShowHelp       = false;  // 是否显示帮助信息
-static bool gShowAST        = false;  // 显示抽象语法树，非线性IR
-static bool gShowLineIR     = false;  // 产生线性IR，线性IR，默认输出
+static bool gShowAST        = false;  // 显示抽象语法树
+static bool gShowLLVMIR     = false;  // 输出LLVM IR
 static bool gShowASM        = false;  // 显示汇编
-static bool gShowSymbol     = false;  // 输出中间IR，含汇编或者自定义IR等，默认输出线性IR
+static bool gShowSymbol     = false;  // 输出编译产物，含LLVM IR、AST或汇编
 static bool gFrontEndAntlr4 = true;  // 前端分析器Antlr4，是否选中
 static bool gAsmAlsoShowIR  = false;  // 在输出汇编时是否输出中间IR作为注释
 static int  gOptLevel       = 0;      // 优化的级别，即-O后面的数字，默认为0
@@ -86,7 +86,7 @@ lb_check:
 				gShowAST = true; break;
 			case 'I':
 			case 'L':
-				gShowLineIR = true;  // 产生中间IR
+				gShowLLVMIR = true;  // 产生LLVM IR
 				break;
 				break;
 			case 'A':
@@ -126,19 +126,19 @@ lb_check:
         return -1;
     }
 
-    // 显示符号信息，必须指定，可选抽象语法树、中间IR(DragonIR)等显示
+    // 显示符号信息，必须指定，可选抽象语法树、LLVM IR等显示
     if (!gShowSymbol) {
         return -1;
     }
 
 	// 检查是否有冲突的选项
-    int flag = (int) gShowLineIR + (int) gShowAST;
+    int flag = (int) gShowLLVMIR + (int) gShowAST;
 
     if (flag == 0) {
         // 两者都没选，默认输出汇编代码
         gShowASM = true;
     } else if (flag != 1) {
-        // 如果 flag > 1，说明 gShowLineIR 和 gShowAST 都为 true。
+        // 如果 flag > 1，说明 gShowLLVMIR 和 gShowAST 都为 true。
         // 即用户同时输入了 -I 和 -T，这两个输出模式冲突，所以报错返回 -1。
         return -1;
     }
@@ -146,7 +146,7 @@ lb_check:
 	if (gOutputFile.empty()) {
         if (gShowAST) {
             gOutputFile = "output.png";
-        } else if (gShowLineIR) {
+        } else if (gShowLLVMIR) {
             gOutputFile = "output.ll";
         } else {
             gOutputFile = "output.s";
@@ -163,8 +163,6 @@ static int compile(string inputFile, string outputFile)
 	int result = -1;
 
 	Module * module = nullptr;
-	IRGenerator * ir_generator = nullptr;
-	ast_node * astRoot = nullptr;
 
 	// 这里采用do {} while(0)架构的目的是如果处理出错可通过break退出循环, 出口唯一
 	// 在编译器编译优化时会自动去除, 因为while恒假的缘故
@@ -172,9 +170,9 @@ static int compile(string inputFile, string outputFile)
 
 		// 编译过程主要包括:
 		// (1）词法语法分析生成AST
-		// (2) 遍历AST生成线性IR
-		// (3) 对线性IR进行优化：目前不支持
-		// (4) 把线性IR转换成汇编
+		// (2) 遍历AST生成MiniLLVM IR
+		// (3) 对MiniLLVM IR进行优化：目前不支持
+		// (4) 把MiniLLVM IR转换成汇编
 
 
 
@@ -184,12 +182,11 @@ static int compile(string inputFile, string outputFile)
 
 		if (!ast_generator->run()) {
 			Status::Error("前端分析错误");
-			delete ast_generator;
 			break;
 		}
 
 		// 获取抽象语法树的根节点
-		astRoot = ast_generator->getASTRoot();
+		ast_node * astRoot = ast_generator->getASTRoot();
 		delete ast_generator;  // 清理前端资源
 
 		// 这里可进行非线性AST的优化
@@ -197,6 +194,7 @@ static int compile(string inputFile, string outputFile)
 
 		if (gShowAST) {
 			OutputAST(astRoot, outputFile);  // 遍历抽象语法树，生成抽象语法树图片
+			ast_node::Delete(astRoot);  // 清理抽象语法树
 			result = 0;  // 设置返回结果：正常
 			break;
 		}
@@ -204,12 +202,13 @@ static int compile(string inputFile, string outputFile)
 
 
 
-		// ===中端执行: 遍历AST转换成线性IR指令===
+		// ===中端执行: 遍历AST转换成MiniLLVM IR===
 
 		// 符号表，保存所有的变量以及函数等信息
-		module = new Module(inputFile);
+		Module * module = new Module(inputFile);
 
-		// 遍历抽象语法树产生线性IR，相关信息保存到符号表中
+		// 遍历抽象语法树产生MiniLLVM IR，相关信息保存到Module中
+		IRGenerator * ir_generator = nullptr;
 		ir_generator = new IRGenerator(astRoot, module);
 		
 		if (!ir_generator->run()) {
@@ -217,14 +216,10 @@ static int compile(string inputFile, string outputFile)
 			break;
 		}
 
-		delete ir_generator;
-		ir_generator = nullptr;
-
 		// 清理抽象语法树
 		ast_node::Delete(astRoot);
-		astRoot = nullptr;
 
-		if (gShowLineIR) {
+		if (gShowLLVMIR) {
 			module->renameIR();  // 对IR的名字重命名
 			module->outputIR(outputFile);  // 输出IR
 			result = 0;  // 设置返回结果：正常
@@ -257,19 +252,15 @@ static int compile(string inputFile, string outputFile)
 			}
 		}
 
+		// 清理符号表
+		module->Delete();
+
 		// 成功执行
 		result = 0;
 
 	} while (false);
 
-	delete ir_generator;
-	if (astRoot != nullptr) {
-		ast_node::Delete(astRoot);
-	}
-	if (module != nullptr) {
-		module->Delete();
-		delete module;
-	}
+	delete module;
 
 	return result;
 }
