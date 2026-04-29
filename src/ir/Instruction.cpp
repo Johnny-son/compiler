@@ -59,3 +59,9 @@ bool Instruction::hasResultValue()
 {
 	return !type->isVoidType();
 }
+
+bool Instruction::isTerminator() const
+{
+	return op == IRInstOperator::IRINST_OP_GOTO || op == IRInstOperator::IRINST_OP_COND_BR ||
+		   op == IRInstOperator::IRINST_OP_EXIT;
+}

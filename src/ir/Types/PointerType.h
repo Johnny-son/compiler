@@ -2,8 +2,9 @@
 
 #pragma once
 
+#include <unordered_map>
+
 #include "Type.h"
-#include "StorageSet.h"
 
 ///
 /// @brief 指针类型
@@ -99,8 +100,15 @@ public:
 	///
 	static const PointerType * get(Type * pointee)
 	{
-		static StorageSet<PointerType, PointerTypeHasher, PointerTypeEqual> storageSet;
-		return storageSet.get(pointee);
+		static std::unordered_map<Type *, PointerType *> storage;
+		auto iter = storage.find(pointee);
+		if (iter != storage.end()) {
+			return iter->second;
+		}
+
+		auto * type = new PointerType(pointee);
+		storage.emplace(pointee, type);
+		return type;
 	}
 
 	///

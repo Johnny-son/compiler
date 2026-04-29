@@ -116,6 +116,9 @@ public:
 	///
 	bool hasResultValue();
 
+	/// @brief 是否为基本块终结指令
+	virtual bool isTerminator() const;
+
 	///
 	/// @brief 获得分配的寄存器编号或ID
 	/// @return int32_t 寄存器编号

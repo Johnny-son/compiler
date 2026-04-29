@@ -4,13 +4,13 @@
 
 #include <cstdarg>
 #include <cstdio>
+#include <fstream>
 #include <string>
 #include <vector>
 
 #include "ir/Types/IntegerType.h"
 #include "ir/Types/VoidType.h"
 #include "ir/Values/FormalParam.h"
-#include "ir/emit/LLVMTextEmitter.h"
 #include "symboltable/ScopeStack.h"
 #include "utils/Status.h"
 
@@ -142,6 +142,11 @@ Function * Module::newFunction(std::string name, Type * returnType, std::vector<
 
 	// 设置参数
 	tempFunc->getParams().assign(params.begin(), params.end());
+	for (size_t index = 0; index < tempFunc->getParams().size(); ++index) {
+		auto * param = tempFunc->getParams()[index];
+		std::string paramName = param->getName().empty() ? "arg" + std::to_string(index) : param->getName();
+		param->setIRName(tempFunc->allocateLocalName(paramName));
+	}
 
 	insertFunctionDirectly(tempFunc);
 
@@ -287,6 +292,25 @@ Value * Module::findVarValue(std::string name)
 	return tempValue;
 }
 
+bool Module::bindValue(const std::string & name, Value * value)
+{
+	if (name.empty() || value == nullptr) {
+		return false;
+	}
+	if (scopeStack->findCurrentScope(name) != nullptr) {
+		return false;
+	}
+
+	value->setName(name);
+	scopeStack->insertValue(value);
+	return true;
+}
+
+Value * Module::lookupValue(const std::string & name) const
+{
+	return scopeStack->findAllScope(name);
+}
+
 ///
 /// @brief 新建全局变量，要求name必须有效，并且加入到全局符号表中。不检查是否现有的符号表中是否存在。
 /// @param type 类型
@@ -354,12 +378,60 @@ void Module::renameIR()
 	}
 }
 
+std::string Module::toString() const
+{
+	std::string str;
+
+	for (auto * func: funcVector) {
+		if (func->isBuiltin()) {
+			str += "declare " + func->getReturnType()->toString() + " " + func->getIRName() + "(";
+			bool first = true;
+			for (auto * param: func->getParams()) {
+				if (!first) {
+					str += ", ";
+				}
+				first = false;
+				str += param->getType()->toString();
+			}
+			str += ")\n";
+		}
+	}
+
+	if (!funcVector.empty()) {
+		str += "\n";
+	}
+
+	for (auto * var: globalVariableVector) {
+		int32_t initializer = var->hasInitializerValue() ? var->getInitializerInt() : 0;
+		str += var->getIRName() + " = global " + var->getType()->toString() + " " + std::to_string(initializer) +
+			   ", align " + std::to_string(var->getAlignment()) + "\n";
+	}
+
+	if (!globalVariableVector.empty()) {
+		str += "\n";
+	}
+
+	for (auto * func: funcVector) {
+		if (!func->isBuiltin()) {
+			std::string funcStr;
+			func->toString(funcStr);
+			if (!funcStr.empty()) {
+				str += funcStr + "\n";
+			}
+		}
+	}
+
+	return str;
+}
+
 /// @brief 文本输出LLVM IR指令
 /// @param filePath 输出文件路径
 void Module::outputIR(const std::string & filePath)
 {
-	LLVMTextEmitter emitter(*this);
-	if (!emitter.emitToFile(filePath)) {
+	std::ofstream out(filePath);
+	if (!out.is_open()) {
 		printf("fopen() failed\n");
+		return;
 	}
+	out << toString();
 }

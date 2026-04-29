@@ -1,10 +1,12 @@
 // 函数实现
 
 #include <cstdlib>
+#include <cctype>
 #include <string>
 
 #include "IRConstant.h"
 #include "Function.h"
+#include "BasicBlock.h"
 
 /// @brief 指定函数名字、函数类型的构造函数
 /// @param _name 函数名称
@@ -62,6 +64,28 @@ void Function::toString(std::string & str)
 {
 	if (builtIn) {
 		// 内置函数则什么都不输出
+		return;
+	}
+
+	if (!basicBlocks.empty()) {
+		str = "define " + getReturnType()->toString() + " " + getIRName() + "(";
+
+		bool firstParam = true;
+		for (auto * param: params) {
+			if (!firstParam) {
+				str += ", ";
+			}
+			firstParam = false;
+			str += param->getType()->toString() + " " + param->getIRName();
+		}
+
+		str += ") {\n";
+		for (auto * block: basicBlocks) {
+			std::string blockStr;
+			block->toString(blockStr);
+			str += blockStr;
+		}
+		str += "}\n";
 		return;
 	}
 
@@ -131,6 +155,68 @@ void Function::toString(std::string & str)
 
 	// 输出函数尾部
 	str += "}\n";
+}
+
+BasicBlock * Function::createBlock(const std::string & name)
+{
+	std::string baseName = name.empty() ? "bb" + std::to_string(basicBlocks.size()) : name;
+	for (char & ch: baseName) {
+		if (ch == '.') {
+			continue;
+		}
+		if (!std::isalnum(static_cast<unsigned char>(ch)) && ch != '_') {
+			ch = '_';
+		}
+	}
+
+	std::string blockName = baseName;
+	int32_t suffix = 0;
+	while (usedBlockNames.find(blockName) != usedBlockNames.end()) {
+		blockName = baseName + "." + std::to_string(++suffix);
+	}
+	usedBlockNames.insert(blockName);
+
+	auto * block = new BasicBlock(this, blockName);
+	basicBlocks.push_back(block);
+	return block;
+}
+
+BasicBlock * Function::getEntryBlock() const
+{
+	return basicBlocks.empty() ? nullptr : basicBlocks.front();
+}
+
+const std::vector<BasicBlock *> & Function::getBasicBlocks() const
+{
+	return basicBlocks;
+}
+
+std::string Function::allocateLocalName(const std::string & hint)
+{
+	std::string candidate;
+	if (hint.empty()) {
+		do {
+			candidate = "%" + std::to_string(nameCounter++);
+		} while (usedLocalNames.find(candidate) != usedLocalNames.end());
+	} else {
+		candidate = hint[0] == '%' ? hint : "%" + hint;
+		for (char & ch: candidate) {
+			if (ch == '%' || ch == '.') {
+				continue;
+			}
+			if (!std::isalnum(static_cast<unsigned char>(ch)) && ch != '_') {
+				ch = '_';
+			}
+		}
+		std::string base = candidate;
+		int32_t suffix = 0;
+		while (usedLocalNames.find(candidate) != usedLocalNames.end()) {
+			candidate = base + "." + std::to_string(++suffix);
+		}
+	}
+
+	usedLocalNames.insert(candidate);
+	return candidate;
 }
 
 /// @brief 设置函数出口指令
@@ -254,6 +340,11 @@ void Function::Delete()
 	// 清理IR指令
 	code.Delete();
 
+	for (auto * block: basicBlocks) {
+		delete block;
+	}
+	basicBlocks.clear();
+
 	// 清理Value
 	for (auto & var: varsVector) {
 		delete var;
@@ -268,7 +359,7 @@ void Function::Delete()
 void Function::renameIR()
 {
 	// 内置函数忽略
-	if (isBuiltin()) {
+	if (isBuiltin() || !basicBlocks.empty()) {
 		return;
 	}
 

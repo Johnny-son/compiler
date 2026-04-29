@@ -7,18 +7,11 @@
 #include "ir/include/Function.h"
 #include "ir/include/Type.h"
 #include "ir/include/Value.h"
-#include "ir/Instructions/BinaryInstruction.h"
-#include "ir/Instructions/CondBranchInstruction.h"
-#include "ir/Instructions/EntryInstruction.h"
-#include "ir/Instructions/ExitInstruction.h"
-#include "ir/Instructions/FuncCallInstruction.h"
-#include "ir/Instructions/GotoInstruction.h"
-#include "ir/Instructions/LabelInstruction.h"
-#include "ir/Instructions/MoveInstruction.h"
 #include "ir/Types/IntegerType.h"
+#include "ir/Types/PointerType.h"
 #include "ir/Values/ConstInt.h"
 #include "ir/Values/FormalParam.h"
-#include "ir/Values/LocalVariable.h"
+#include "ir/Values/GlobalVariable.h"
 #include "utils/Status.h"
 
 namespace {
@@ -71,7 +64,7 @@ void report_ir_error(const char * error_code, int64_t lineno, const char * categ
 } // namespace
 
 // 构造函数
-IRGenerator::IRGenerator(ast_node * _root, Module * _module) : root(_root), module(_module)
+IRGenerator::IRGenerator(ast_node * _root, Module * _module) : root(_root), module(_module), builder(_module)
 {
 	/* 叶子节点 */
 	ast2ir_handlers[ast_operator_type::AST_OP_LEAF_LITERAL_UINT] = &IRGenerator::ir_leaf_node_uint;
@@ -251,12 +244,8 @@ bool IRGenerator::ir_function_formal_params(ast_node * node)
 		auto * param = currentFunc->getParams()[i];
 		// AST形参节点与Module中的FormalParam一一对应
 		auto * paramNode = node->sons[i];
-		Value * localParam = module->newVarValue(
-			param->getType(),
-			param->getName(),
-			paramNode != nullptr ? paramNode->line_no : (node != nullptr ? node->line_no : -1)
-		);
-		if (localParam == nullptr) {
+		AllocaInst * localParam = createEntryAlloca(currentFunc, param->getType(), param->getName());
+		if (localParam == nullptr || !module->bindValue(param->getName(), localParam)) {
 			report_ir_error(
 				"E1112",
 				paramNode != nullptr ? paramNode->line_no : (node != nullptr ? node->line_no : -1),
@@ -268,7 +257,7 @@ bool IRGenerator::ir_function_formal_params(ast_node * node)
 		}
 
 		// 形参进入函数体后统一按局部变量使用，这里先把FormalParam拷到局部槽位
-		node->blockInsts.addInst(new MoveInstruction(currentFunc, localParam, param));
+		builder.createStore(param, localParam);
 	}
 
 	return true;
@@ -349,35 +338,12 @@ bool IRGenerator::ir_function_body(ast_node * node)
 
 	bool ok = false;
 	do {
-		InterCode & irCode = currentFunc->getInterCode();
-
-		// 函数入口指令放在最前，后端和输出阶段都依赖它建立函数框架
-		irCode.addInst(new EntryInstruction(currentFunc));
-
-		// 所有return最终都汇聚到统一出口标签，便于后端和文本输出处理
-		auto * exitLabelInst = new LabelInstruction(currentFunc);
-		currentFunc->setExitLabel(exitLabelInst);
+		BasicBlock * entryBlock = currentFunc->createBlock("entry");
+		builder.setInsertPoint(entryBlock);
 
 		if (!ir_function_formal_params(param_node)) {
 			break;
 		}
-		node->blockInsts.addInst(param_node->blockInsts);
-
-		LocalVariable * retValue = nullptr;
-		if (!type_node->type->isVoidType()) {
-			// 非void函数统一分配返回值槽，return时先写槽再跳统一出口
-			retValue = static_cast<LocalVariable *>(module->newVarValue(type_node->type, "", -1));
-			if (retValue == nullptr) {
-				report_ir_error(
-					"E1105",
-					name_node != nullptr ? name_node->line_no : -1,
-					"返回值处理",
-					"函数(%s)返回值变量创建失败",
-					name_node->name.c_str());
-				break;
-			}
-		}
-		currentFunc->setReturnValue(retValue);
 
 		// 函数体作用域已在进入函数时建立，因此函数体block本身不再重复enterScope
 		block_node->needScope = false;
@@ -385,13 +351,17 @@ bool IRGenerator::ir_function_body(ast_node * node)
 			break;
 		}
 
-		node->blockInsts.addInst(block_node->blockInsts);
-		irCode.addInst(node->blockInsts);
-		irCode.addInst(exitLabelInst);
-		irCode.addInst(new ExitInstruction(currentFunc, retValue));
+		if (builder.getInsertBlock() != nullptr && !builder.getInsertBlock()->hasTerminator()) {
+			if (type_node->type->isVoidType()) {
+				builder.createRetVoid();
+			} else {
+				builder.createRet(module->newConstInt(0));
+			}
+		}
 		ok = true;
 	} while (false);
 
+	builder.setInsertPoint(nullptr);
 	module->setCurrentFunction(nullptr);
 	module->leaveScope();
 
@@ -408,14 +378,15 @@ bool IRGenerator::ir_block(ast_node * node)
 
 	std::vector<ast_node *>::iterator pIter;
 	for (pIter = node->sons.begin(); pIter != node->sons.end(); ++pIter) {
+		if (builder.getInsertBlock() != nullptr && builder.getInsertBlock()->hasTerminator()) {
+			break;
+		}
 
 		// 遍历Block的每个语句，进行显示或者运算
 		ast_node * temp = ir_visit_ast_node(*pIter);
 		if (!temp) {
 			return false;
 		}
-
-		node->blockInsts.addInst(temp->blockInsts);
 	}
 
 	// 离开作用域
@@ -449,34 +420,23 @@ bool IRGenerator::ir_return(ast_node * node)
 		}
 	}
 
-	LocalVariable * retSlot = currentFunc->getReturnValue();
-	if (right != nullptr && retSlot == nullptr) {
+	if (right != nullptr && currentFunc->getReturnType()->isVoidType()) {
 		report_ir_error("E1120", node != nullptr ? node->line_no : -1, "返回语句", "void函数不能返回表达式");
 		return false;
 	}
 
-	if (right == nullptr && retSlot != nullptr) {
+	if (right == nullptr && !currentFunc->getReturnType()->isVoidType()) {
 		report_ir_error("E1121", node != nullptr ? node->line_no : -1, "返回语句", "非void函数必须返回表达式");
 		return false;
 	}
 
-	// 返回值存在时则移动指令到node中
 	if (right) {
-
-		// 创建临时变量保存IR的值，以及线性IR指令
-		node->blockInsts.addInst(right->blockInsts);
-
-		// 返回值赋值到函数返回值变量上，然后跳转到函数的尾部
-		node->blockInsts.addInst(new MoveInstruction(currentFunc, retSlot, right->val));
-
-		node->val = right->val;
+		node->val = emitRValue(right->val, "retval");
+		builder.createRet(node->val);
 	} else {
-		// 没有返回值
 		node->val = nullptr;
+		builder.createRetVoid();
 	}
-
-	// 跳转到函数的尾部出口指令上
-	node->blockInsts.addInst(new GotoInstruction(currentFunc, currentFunc->getExitLabel()));
 
 	return true;
 }
@@ -505,12 +465,7 @@ bool IRGenerator::ir_leaf_node_uint(ast_node * node)
 // 标识符叶子节点翻译成线性中间IR，变量声明的不走这个语句
 bool IRGenerator::ir_leaf_node_var_id(ast_node * node)
 {
-	Value * val;
-
-	// 查找ID型Value
-	// 变量，则需要在符号表中查找对应的值
-
-	val = module->findVarValue(node->name);
+	Value * val = module->lookupValue(node->name);
 	if (val == nullptr) {
 		report_ir_error(
 			"E1010",
@@ -524,6 +479,59 @@ bool IRGenerator::ir_leaf_node_var_id(ast_node * node)
 	node->val = val;
 
 	return true;
+}
+
+Value * IRGenerator::emitRValue(Value * value, const std::string & name)
+{
+	if (value == nullptr) {
+		return nullptr;
+	}
+
+	if (dynamic_cast<ConstInt *>(value) != nullptr) {
+		return value;
+	}
+
+	if (dynamic_cast<GlobalVariable *>(value) != nullptr || dynamic_cast<PointerType *>(value->getType()) != nullptr) {
+		return builder.createLoad(value, name);
+	}
+
+	return value;
+}
+
+Value * IRGenerator::emitCondValue(Value * value)
+{
+	Value * cond = emitRValue(value, "cond");
+	if (cond == nullptr) {
+		return nullptr;
+	}
+
+	if (cond->getType()->isInt1Byte()) {
+		return cond;
+	}
+
+	return builder.createICmpNE(cond, module->newConstInt(0), "tobool");
+}
+
+AllocaInst * IRGenerator::createEntryAlloca(Function * func, Type * type, const std::string & name)
+{
+	BasicBlock * entry = func->getEntryBlock();
+	if (entry == nullptr) {
+		entry = func->createBlock("entry");
+	}
+
+	auto * alloca = new AllocaInst(func, type, "");
+	if (!name.empty()) {
+		alloca->setName(name);
+	}
+	alloca->setIRName(func->allocateLocalName(name.empty() ? "" : name + ".addr"));
+
+	auto & instructions = entry->getInstructions();
+	auto insertPos = instructions.begin();
+	while (insertPos != instructions.end() && dynamic_cast<AllocaInst *>(*insertPos) != nullptr) {
+		++insertPos;
+	}
+	instructions.insert(insertPos, alloca);
+	return alloca;
 }
 
 bool IRGenerator::ir_binary(ast_node * node, IRInstOperator op)
@@ -542,11 +550,46 @@ bool IRGenerator::ir_binary(ast_node * node, IRInstOperator op)
 		return false;
 	}
 
-	auto * inst = new BinaryInstruction(module->getCurrentFunction(), op, left->val, right->val, IntegerType::getTypeInt());
-	node->blockInsts.addInst(left->blockInsts);
-	node->blockInsts.addInst(right->blockInsts);
-	node->blockInsts.addInst(inst);
-	node->val = inst;
+	Value * lhs = emitRValue(left->val, "lhs");
+	Value * rhs = emitRValue(right->val, "rhs");
+
+	switch (op) {
+		case IRInstOperator::IRINST_OP_ADD_I:
+			node->val = builder.createAdd(lhs, rhs, "addtmp");
+			break;
+		case IRInstOperator::IRINST_OP_SUB_I:
+			node->val = builder.createSub(lhs, rhs, "subtmp");
+			break;
+		case IRInstOperator::IRINST_OP_MUL_I:
+			node->val = builder.createMul(lhs, rhs, "multmp");
+			break;
+		case IRInstOperator::IRINST_OP_DIV_I:
+			node->val = builder.createSDiv(lhs, rhs, "divtmp");
+			break;
+		case IRInstOperator::IRINST_OP_MOD_I:
+			node->val = builder.createSRem(lhs, rhs, "modtmp");
+			break;
+		case IRInstOperator::IRINST_OP_CMP_EQ_I:
+			node->val = builder.createZExt(builder.createICmpEQ(lhs, rhs, "cmptmp"), IntegerType::getTypeInt(), "booltoint");
+			break;
+		case IRInstOperator::IRINST_OP_CMP_NE_I:
+			node->val = builder.createZExt(builder.createICmpNE(lhs, rhs, "cmptmp"), IntegerType::getTypeInt(), "booltoint");
+			break;
+		case IRInstOperator::IRINST_OP_CMP_LT_I:
+			node->val = builder.createZExt(builder.createICmpSLT(lhs, rhs, "cmptmp"), IntegerType::getTypeInt(), "booltoint");
+			break;
+		case IRInstOperator::IRINST_OP_CMP_LE_I:
+			node->val = builder.createZExt(builder.createICmpSLE(lhs, rhs, "cmptmp"), IntegerType::getTypeInt(), "booltoint");
+			break;
+		case IRInstOperator::IRINST_OP_CMP_GT_I:
+			node->val = builder.createZExt(builder.createICmpSGT(lhs, rhs, "cmptmp"), IntegerType::getTypeInt(), "booltoint");
+			break;
+		case IRInstOperator::IRINST_OP_CMP_GE_I:
+			node->val = builder.createZExt(builder.createICmpSGE(lhs, rhs, "cmptmp"), IntegerType::getTypeInt(), "booltoint");
+			break;
+		default:
+			return false;
+	}
 
 	return true;
 }
@@ -627,14 +670,8 @@ bool IRGenerator::ir_logical_not(ast_node * node)
 	}
 
 	// 逻辑非统一翻译成“expr == 0”，结果仍为i32 0/1
-	node->blockInsts.addInst(expr->blockInsts);
-	node->blockInsts.addInst(new BinaryInstruction(
-		module->getCurrentFunction(),
-		IRInstOperator::IRINST_OP_CMP_EQ_I,
-		expr->val,
-		module->newConstInt(0),
-		IntegerType::getTypeInt()));
-	node->val = node->blockInsts.getInsts().back();
+	Value * value = emitRValue(expr->val, "nottmp");
+	node->val = builder.createZExt(builder.createICmpEQ(value, module->newConstInt(0), "nottmp"), IntegerType::getTypeInt(), "booltoint");
 
 	return true;
 }
@@ -643,40 +680,37 @@ bool IRGenerator::ir_logical_not(ast_node * node)
 bool IRGenerator::ir_logical_and(ast_node * node)
 {
 	Function * currentFunc = module->getCurrentFunction();
-	Value * result = module->newVarValue(IntegerType::getTypeInt(), "", node != nullptr ? node->line_no : -1);
+	AllocaInst * result = createEntryAlloca(currentFunc, IntegerType::getTypeInt(), "and.tmp");
 	if (result == nullptr) {
 		report_ir_error("E1215", node != nullptr ? node->line_no : -1, "逻辑运算", "逻辑与结果临时变量创建失败");
 		return false;
 	}
 
-	// 默认结果为0，只有左右两侧都为真时才改写成1
 	ast_node * left = ir_visit_ast_node(node->sons[0]);
 	if (!left) {
 		return false;
 	}
 
-	auto * rhsLabel = new LabelInstruction(currentFunc);
-	auto * trueLabel = new LabelInstruction(currentFunc);
-	auto * endLabel = new LabelInstruction(currentFunc);
+	BasicBlock * rhsBlock = currentFunc->createBlock("land.rhs");
+	BasicBlock * trueBlock = currentFunc->createBlock("land.true");
+	BasicBlock * endBlock = currentFunc->createBlock("land.end");
 
-	node->blockInsts.addInst(new MoveInstruction(currentFunc, result, module->newConstInt(0)));
-	node->blockInsts.addInst(left->blockInsts);
+	builder.createStore(module->newConstInt(0), result);
 	// 左侧为假直接结束，为真才继续计算右侧
-	node->blockInsts.addInst(new CondBranchInstruction(currentFunc, left->val, rhsLabel, endLabel));
-	node->blockInsts.addInst(rhsLabel);
+	builder.createCondBr(emitCondValue(left->val), rhsBlock, endBlock);
+	builder.setInsertPoint(rhsBlock);
 
 	ast_node * right = ir_visit_ast_node(node->sons[1]);
 	if (!right) {
 		return false;
 	}
 
-	node->blockInsts.addInst(right->blockInsts);
-	node->blockInsts.addInst(new CondBranchInstruction(currentFunc, right->val, trueLabel, endLabel));
-	node->blockInsts.addInst(trueLabel);
-	node->blockInsts.addInst(new MoveInstruction(currentFunc, result, module->newConstInt(1)));
-	node->blockInsts.addInst(new GotoInstruction(currentFunc, endLabel));
-	node->blockInsts.addInst(endLabel);
-	node->val = result;
+	builder.createCondBr(emitCondValue(right->val), trueBlock, endBlock);
+	builder.setInsertPoint(trueBlock);
+	builder.createStore(module->newConstInt(1), result);
+	builder.createBr(endBlock);
+	builder.setInsertPoint(endBlock);
+	node->val = builder.createLoad(result, "land.val");
 
 	return true;
 }
@@ -685,55 +719,39 @@ bool IRGenerator::ir_logical_and(ast_node * node)
 bool IRGenerator::ir_logical_or(ast_node * node)
 {
 	Function * currentFunc = module->getCurrentFunction();
-	Value * result = module->newVarValue(IntegerType::getTypeInt(), "", node != nullptr ? node->line_no : -1);
+	AllocaInst * result = createEntryAlloca(currentFunc, IntegerType::getTypeInt(), "or.tmp");
 	if (result == nullptr) {
 		report_ir_error("E1216", node != nullptr ? node->line_no : -1, "逻辑运算", "逻辑或结果临时变量创建失败");
 		return false;
 	}
 
-	// 默认结果为1，只有左右两侧都为假时才改写成0
 	ast_node * left = ir_visit_ast_node(node->sons[0]);
 	if (!left) {
 		return false;
 	}
 
-	auto * rhsLabel = new LabelInstruction(currentFunc);
-	auto * falseLabel = new LabelInstruction(currentFunc);
-	auto * endLabel = new LabelInstruction(currentFunc);
+	BasicBlock * rhsBlock = currentFunc->createBlock("lor.rhs");
+	BasicBlock * falseBlock = currentFunc->createBlock("lor.false");
+	BasicBlock * endBlock = currentFunc->createBlock("lor.end");
 
-	node->blockInsts.addInst(new MoveInstruction(currentFunc, result, module->newConstInt(1)));
-	node->blockInsts.addInst(left->blockInsts);
+	builder.createStore(module->newConstInt(1), result);
 	// 左侧为真直接结束，为假才继续计算右侧
-	node->blockInsts.addInst(new CondBranchInstruction(currentFunc, left->val, endLabel, rhsLabel));
-	node->blockInsts.addInst(rhsLabel);
+	builder.createCondBr(emitCondValue(left->val), endBlock, rhsBlock);
+	builder.setInsertPoint(rhsBlock);
 
 	ast_node * right = ir_visit_ast_node(node->sons[1]);
 	if (!right) {
 		return false;
 	}
 
-	node->blockInsts.addInst(right->blockInsts);
-	node->blockInsts.addInst(new CondBranchInstruction(currentFunc, right->val, endLabel, falseLabel));
-	node->blockInsts.addInst(falseLabel);
-	node->blockInsts.addInst(new MoveInstruction(currentFunc, result, module->newConstInt(0)));
-	node->blockInsts.addInst(new GotoInstruction(currentFunc, endLabel));
-	node->blockInsts.addInst(endLabel);
-	node->val = result;
+	builder.createCondBr(emitCondValue(right->val), endBlock, falseBlock);
+	builder.setInsertPoint(falseBlock);
+	builder.createStore(module->newConstInt(0), result);
+	builder.createBr(endBlock);
+	builder.setInsertPoint(endBlock);
+	node->val = builder.createLoad(result, "lor.val");
 
 	return true;
-}
-
-// 判断一段IR是否已经以跳转/退出等终结指令结束
-bool IRGenerator::block_ends_with_terminator(const InterCode & code) const
-{
-	const auto & insts = const_cast<InterCode &>(code).getInsts();
-	if (insts.empty()) {
-		return false;
-	}
-
-	IRInstOperator op = insts.back()->getOp();
-	return op == IRInstOperator::IRINST_OP_GOTO || op == IRInstOperator::IRINST_OP_COND_BR ||
-		   op == IRInstOperator::IRINST_OP_EXIT;
 }
 
 // if语句AST节点翻译成线性中间IR
@@ -745,44 +763,38 @@ bool IRGenerator::ir_if(ast_node * node)
 		return false;
 	}
 
-	auto * thenLabel = new LabelInstruction(currentFunc);
-	auto * endLabel = new LabelInstruction(currentFunc);
-	LabelInstruction * elseLabel = endLabel;
+	BasicBlock * thenBlock = currentFunc->createBlock("if.then");
+	BasicBlock * endBlock = currentFunc->createBlock("if.end");
+	BasicBlock * elseBlock = endBlock;
 	if (node->sons.size() > 2 && node->sons[2] != nullptr) {
-		elseLabel = new LabelInstruction(currentFunc);
+		elseBlock = currentFunc->createBlock("if.else");
 	}
 
-	// 先根据条件值跳then或else/end，再分别拼接分支代码
-	node->blockInsts.addInst(condNode->blockInsts);
-	node->blockInsts.addInst(new CondBranchInstruction(currentFunc, condNode->val, thenLabel, elseLabel));
-	node->blockInsts.addInst(thenLabel);
+	builder.createCondBr(emitCondValue(condNode->val), thenBlock, elseBlock);
+	builder.setInsertPoint(thenBlock);
 
 	ast_node * thenNode = ir_visit_ast_node(node->sons[1]);
 	if (!thenNode) {
 		return false;
 	}
 
-	bool thenTerminated = block_ends_with_terminator(thenNode->blockInsts);
-	node->blockInsts.addInst(thenNode->blockInsts);
-	if (!thenTerminated) {
-		node->blockInsts.addInst(new GotoInstruction(currentFunc, endLabel));
+	if (builder.getInsertBlock() != nullptr && !builder.getInsertBlock()->hasTerminator()) {
+		builder.createBr(endBlock);
 	}
 
-	if (elseLabel != endLabel) {
-		node->blockInsts.addInst(elseLabel);
+	if (elseBlock != endBlock) {
+		builder.setInsertPoint(elseBlock);
 		ast_node * elseNode = ir_visit_ast_node(node->sons[2]);
 		if (!elseNode) {
 			return false;
 		}
 
-		bool elseTerminated = block_ends_with_terminator(elseNode->blockInsts);
-		node->blockInsts.addInst(elseNode->blockInsts);
-		if (!elseTerminated) {
-			node->blockInsts.addInst(new GotoInstruction(currentFunc, endLabel));
+		if (builder.getInsertBlock() != nullptr && !builder.getInsertBlock()->hasTerminator()) {
+			builder.createBr(endBlock);
 		}
 	}
 
-	node->blockInsts.addInst(endLabel);
+	builder.setInsertPoint(endBlock);
 	return true;
 }
 
@@ -790,14 +802,15 @@ bool IRGenerator::ir_if(ast_node * node)
 bool IRGenerator::ir_while(ast_node * node)
 {
 	Function * currentFunc = module->getCurrentFunction();
-	auto * condLabel = new LabelInstruction(currentFunc);
-	auto * bodyLabel = new LabelInstruction(currentFunc);
-	auto * endLabel = new LabelInstruction(currentFunc);
+	BasicBlock * condBlock = currentFunc->createBlock("while.cond");
+	BasicBlock * bodyBlock = currentFunc->createBlock("while.body");
+	BasicBlock * endBlock = currentFunc->createBlock("while.end");
 
 	// 记录当前循环的continue/break目标，供嵌套循环中的break/continue查栈顶
-	loopTargets.emplace_back(condLabel, endLabel);
+	loopTargets.emplace_back(condBlock, endBlock);
 
-	node->blockInsts.addInst(condLabel);
+	builder.createBr(condBlock);
+	builder.setInsertPoint(condBlock);
 
 	ast_node * condNode = ir_visit_ast_node(node->sons[0]);
 	if (!condNode) {
@@ -805,9 +818,8 @@ bool IRGenerator::ir_while(ast_node * node)
 		return false;
 	}
 
-	node->blockInsts.addInst(condNode->blockInsts);
-	node->blockInsts.addInst(new CondBranchInstruction(currentFunc, condNode->val, bodyLabel, endLabel));
-	node->blockInsts.addInst(bodyLabel);
+	builder.createCondBr(emitCondValue(condNode->val), bodyBlock, endBlock);
+	builder.setInsertPoint(bodyBlock);
 
 	ast_node * bodyNode = ir_visit_ast_node(node->sons[1]);
 	if (!bodyNode) {
@@ -815,14 +827,12 @@ bool IRGenerator::ir_while(ast_node * node)
 		return false;
 	}
 
-	bool bodyTerminated = block_ends_with_terminator(bodyNode->blockInsts);
-	node->blockInsts.addInst(bodyNode->blockInsts);
-	if (!bodyTerminated) {
-		node->blockInsts.addInst(new GotoInstruction(currentFunc, condLabel));
+	if (builder.getInsertBlock() != nullptr && !builder.getInsertBlock()->hasTerminator()) {
+		builder.createBr(condBlock);
 	}
 
-	node->blockInsts.addInst(endLabel);
 	loopTargets.pop_back();
+	builder.setInsertPoint(endBlock);
 
 	return true;
 }
@@ -835,8 +845,7 @@ bool IRGenerator::ir_break(ast_node * node)
 		return false;
 	}
 
-	node->blockInsts.addInst(
-		new GotoInstruction(module->getCurrentFunction(), loopTargets.back().second));
+	builder.createBr(loopTargets.back().second);
 	return true;
 }
 
@@ -848,8 +857,7 @@ bool IRGenerator::ir_continue(ast_node * node)
 		return false;
 	}
 
-	node->blockInsts.addInst(
-		new GotoInstruction(module->getCurrentFunction(), loopTargets.back().first));
+	builder.createBr(loopTargets.back().first);
 	return true;
 }
 
@@ -873,17 +881,9 @@ bool IRGenerator::ir_assign(ast_node * node)
 		return false;
 	}
 
-	// 这里只处理整型的数据，如需支持实数，则需要针对类型进行处理
-
-	MoveInstruction * movInst = new MoveInstruction(module->getCurrentFunction(), left->val, right->val);
-
-	// 创建临时变量保存IR的值，以及线性IR指令
-	node->blockInsts.addInst(right->blockInsts);
-	node->blockInsts.addInst(left->blockInsts);
-	node->blockInsts.addInst(movInst);
-
-	// 这里假定赋值的类型是一致的
-	node->val = movInst;
+	Value * value = emitRValue(right->val, "assigntmp");
+	builder.createStore(value, left->val);
+	node->val = value;
 
 	return true;
 }
@@ -901,7 +901,6 @@ bool IRGenerator::ir_declare_statment(ast_node * node)
 			break;
 		}
 
-		node->blockInsts.addInst(child->blockInsts);
 	}
 
 	return result;
@@ -914,18 +913,17 @@ bool IRGenerator::ir_variable_declare(ast_node * node)
 
 	// TODO 这里可强化类型等检查
 
-	node->val = module->newVarValue(node->sons[0]->type, node->sons[1]->name, node->sons[1]->line_no);
-	if (node->val == nullptr) {
-		return false;
-	}
-
-	if (node->sons.size() < 3) {
-		return true;
-	}
-
-	ast_node * init_expr = node->sons[2];
-
 	if (module->getCurrentFunction() == nullptr) {
+		node->val = module->newVarValue(node->sons[0]->type, node->sons[1]->name, node->sons[1]->line_no);
+		if (node->val == nullptr) {
+			return false;
+		}
+
+		if (node->sons.size() < 3) {
+			return true;
+		}
+
+		ast_node * init_expr = node->sons[2];
 		int32_t init_value = 0;
 		if (!eval_global_const_expr(init_expr, init_value)) {
 			report_ir_error(
@@ -952,13 +950,23 @@ bool IRGenerator::ir_variable_declare(ast_node * node)
 		return true;
 	}
 
+	AllocaInst * alloca = createEntryAlloca(module->getCurrentFunction(), node->sons[0]->type, node->sons[1]->name);
+	if (alloca == nullptr || !module->bindValue(node->sons[1]->name, alloca)) {
+		return false;
+	}
+	node->val = alloca;
+
+	if (node->sons.size() < 3) {
+		return true;
+	}
+
+	ast_node * init_expr = node->sons[2];
 	ast_node * init_node = ir_visit_ast_node(init_expr);
 	if (!init_node) {
 		return false;
 	}
 
-	node->blockInsts.addInst(init_node->blockInsts);
-	node->blockInsts.addInst(new MoveInstruction(module->getCurrentFunction(), node->val, init_node->val));
+	builder.createStore(emitRValue(init_node->val, "inittmp"), node->val);
 
 	return true;
 }
@@ -1136,7 +1144,8 @@ bool IRGenerator::ir_function_call(ast_node * node)
 				return false;
 			}
 
-			Type * realType = temp->val != nullptr ? temp->val->getType() : nullptr;
+			Value * realValue = emitRValue(temp->val, "arg");
+			Type * realType = realValue != nullptr ? realValue->getType() : nullptr;
 			Type * formalType = formalParams[index]->getType();
 			if (realType == nullptr || formalType == nullptr || realType->getTypeID() != formalType->getTypeID()) {
 				report_ir_error(
@@ -1151,21 +1160,14 @@ bool IRGenerator::ir_function_call(ast_node * node)
 				return false;
 			}
 
-			realParams.push_back(temp->val);
-			node->blockInsts.addInst(temp->blockInsts);
+			realParams.push_back(realValue);
 		}
 	}
 
 	// 返回调用有返回值，则需要分配临时变量，用于保存函数调用的返回值
 	Type * type = calledFunction->getReturnType();
 
-	FuncCallInstruction * funcCallInst = new FuncCallInstruction(currentFunc, calledFunction, realParams, type);
-
-	// 创建函数调用指令
-	node->blockInsts.addInst(funcCallInst);
-
-	// 函数调用结果Value保存到node中，可能为空，上层节点可利用这个值
-	node->val = funcCallInst;
+	node->val = builder.createCall(calledFunction, realParams, type->isVoidType() ? "" : "calltmp");
 
 	return true;
 }

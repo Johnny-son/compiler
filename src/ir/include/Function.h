@@ -3,6 +3,7 @@
 #pragma once
 
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "GlobalValue.h"
@@ -11,6 +12,8 @@
 #include "ir/Values/LocalVariable.h"
 #include "ir/Values/MemVariable.h"
 #include "IRCode.h"
+
+class BasicBlock;
 
 ///
 /// @brief 描述函数信息的类，是全局静态存储，其Value的类型为FunctionType
@@ -49,6 +52,18 @@ public:
 	/// @brief 函数指令信息输出
 	/// @param str 函数指令
 	void toString(std::string & str);
+
+	/// @brief 创建基本块
+	BasicBlock * createBlock(const std::string & name = "");
+
+	/// @brief 获取入口基本块
+	BasicBlock * getEntryBlock() const;
+
+	/// @brief 获取基本块列表
+	const std::vector<BasicBlock *> & getBasicBlocks() const;
+
+	/// @brief 分配函数内唯一的LLVM局部名字
+	std::string allocateLocalName(const std::string & hint = "");
 
 	/// @brief 设置函数出口指令
 	/// @param inst 出口Label指令
@@ -177,6 +192,18 @@ private:
 	/// @brief 线性IR指令块，可包含多条IR指令
 	///
 	InterCode code;
+
+	/// @brief LLVM风格基本块列表
+	std::vector<BasicBlock *> basicBlocks;
+
+	/// @brief LLVM局部SSA名字计数器
+	int32_t nameCounter = 0;
+
+	/// @brief 已分配的LLVM局部名字
+	std::unordered_set<std::string> usedLocalNames;
+
+	/// @brief 已分配的LLVM基本块名字
+	std::unordered_set<std::string> usedBlockNames;
 
 	///
 	/// @brief 函数内变量的向量表，可能重名，请注意
