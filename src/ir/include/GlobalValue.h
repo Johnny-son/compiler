@@ -1,19 +1,4 @@
-///
-/// @file GlobalValue.h
-/// @brief 描述全局值或对象的类，可以是常量、函数、全局变量等
-///
-/// @author zenglj (zenglj@live.com)
-/// @version 1.0
-/// @date 2024-09-29
-///
-/// @copyright Copyright (c) 2024
-///
-/// @par 修改日志:
-/// <table>
-/// <tr><th>Date       <th>Version <th>Author  <th>Description
-/// <tr><td>2024-09-29 <td>1.0     <td>zenglj  <td>新建
-/// </table>
-///
+// 描述全局值或对象的类，可以是常量、函数、全局变量等
 #pragma once
 
 #include "Constant.h"

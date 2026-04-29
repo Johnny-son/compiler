@@ -1,19 +1,5 @@
-﻿///
-/// @file Value.h
-/// @brief 值操作类型，所有的变量、函数、常量都是Value
-///
-/// @author zenglj (zenglj@live.com)
-/// @version 1.0
-/// @date 2024-09-29
-///
-/// @copyright Copyright (c) 2024
-///
-/// @par 修改日志:
-/// <table>
-/// <tr><th>Date       <th>Version <th>Author  <th>Description
-/// <tr><td>2024-09-29 <td>1.0     <td>zenglj  <td>新建
-/// </table>
-///
+// 值操作类型，所有的变量、函数、常量都是Value
+
 #pragma once
 
 #include <cstdint>

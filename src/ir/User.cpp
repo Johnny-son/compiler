@@ -1,19 +1,4 @@
-///
-/// @file User.cpp
-/// @brief 使用Value的User，该User也是Value。函数、指令都是User
-///
-/// @author zenglj (zenglj@live.com)
-/// @version 1.0
-/// @date 2024-09-29
-///
-/// @copyright Copyright (c) 2024
-///
-/// @par 修改日志:
-/// <table>
-/// <tr><th>Date       <th>Version <th>Author  <th>Description
-/// <tr><td>2024-09-29 <td>1.0     <td>zenglj  <td>新建
-/// </table>
-///
+// 使用Value的User，该User也是Value。函数、指令都是User
 
 #include <algorithm>
 
@@ -137,6 +122,7 @@ void User::clearOperands()
 		delete use;
 	}
 }
+
 ///
 /// @brief Get the Operands object
 /// @return std::vector<Use *>&
