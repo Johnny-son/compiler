@@ -22,7 +22,7 @@ Type * getPointeeType(Value * ptr)
 } // namespace
 
 LoadInst::LoadInst(Function * func, Value * ptr, const std::string & name)
-	: Instruction(func, IRInstOperator::IRINST_OP_MAX, getPointeeType(ptr))
+	: Instruction(func, getPointeeType(ptr))
 {
 	this->IRName = name;
 	addOperand(ptr);

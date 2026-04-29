@@ -4,6 +4,7 @@
 
 #include "ir/include/Function.h"
 #include "ir/include/Type.h"
+#include "ir/Instructions/AllocaInst.h"
 
 namespace {
 
@@ -30,21 +31,31 @@ int slotSizeForType(Type * type)
 	return std::max(FunctionFrameLayout::stackSlotSize, size);
 }
 
+int slotSizeForValue(const IRValueView & value)
+{
+	auto * allocaInst = dynamic_cast<AllocaInst *>(value.raw());
+	if (allocaInst != nullptr) {
+		return slotSizeForType(allocaInst->getAllocatedType());
+	}
+
+	return slotSizeForType(value.type());
+}
+
 StackObjectKind kindForValue(const IRValueView & value)
 {
 	if (value.isFormalParam()) {
 		return StackObjectKind::FormalParam;
 	}
 
-	if (value.isLocalVariable()) {
-		return StackObjectKind::LocalVariable;
+	if (dynamic_cast<AllocaInst *>(value.raw()) != nullptr) {
+		return StackObjectKind::AllocaObject;
 	}
 
 	if (value.isInstructionResult()) {
 		return StackObjectKind::InstructionResult;
 	}
 
-	return StackObjectKind::LocalVariable;
+	return StackObjectKind::AllocaObject;
 }
 
 std::string debugNameForValue(const IRValueView & value)
@@ -62,7 +73,7 @@ void appendValueSlot(FunctionFrameLayout & layout, const IRValueView & value, in
 		return;
 	}
 
-	const int32_t size = slotSizeForType(value.type());
+	const int32_t size = slotSizeForValue(value);
 	cursor += size;
 
 	StackSlotInfo slot;
@@ -177,10 +188,6 @@ FunctionFrameLayout FrameLayoutBuilder::build(IRFunctionView function)
 
 	for (const auto & param: function.params()) {
 		appendValueSlot(layout, param, cursor);
-	}
-
-	for (const auto & local: function.locals()) {
-		appendValueSlot(layout, local, cursor);
 	}
 
 	for (const auto & inst: function.instructions()) {

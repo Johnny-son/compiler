@@ -5,7 +5,7 @@
 #include "BasicBlock.h"
 
 PhiInst::PhiInst(Function * func, Type * type, const std::string & name)
-	: Instruction(func, IRInstOperator::IRINST_OP_MAX, type)
+	: Instruction(func, type)
 {
 	this->IRName = name;
 }

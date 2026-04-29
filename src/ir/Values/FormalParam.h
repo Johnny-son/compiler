@@ -3,7 +3,6 @@
 #pragma once
 
 #include "Value.h"
-#include "IRConstant.h"
 
 /// @brief 描述函数形参类
 class FormalParam : public Value {

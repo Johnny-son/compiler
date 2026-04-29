@@ -6,7 +6,7 @@
 
 CallInst::CallInst(
 	Function * func, Function * callee, const std::vector<Value *> & args, Type * returnType, const std::string & name)
-	: Instruction(func, IRInstOperator::IRINST_OP_MAX, returnType), callee(callee)
+	: Instruction(func, returnType), callee(callee)
 {
 	this->IRName = name;
 	for (auto * arg: args) {

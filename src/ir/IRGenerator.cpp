@@ -113,7 +113,7 @@ IRGenerator::IRGenerator(ast_node * _root, Module * _module) : root(_root), modu
 	ast2ir_handlers[ast_operator_type::AST_OP_COMPILE_UNIT] = &IRGenerator::ir_compile_unit;
 }
 
-// 遍历抽象语法树产生线性IR，保存到IRCode中
+// 遍历抽象语法树产生MiniLLVM IR，保存到Module中
 bool IRGenerator::run()
 {
 	ast_node * node;
@@ -245,7 +245,7 @@ bool IRGenerator::ir_function_formal_params(ast_node * node)
 		// AST形参节点与Module中的FormalParam一一对应
 		auto * paramNode = node->sons[i];
 		AllocaInst * localParam = createEntryAlloca(currentFunc, param->getType(), param->getName());
-		if (localParam == nullptr || !module->bindValue(param->getName(), localParam)) {
+		if (localParam == nullptr || !module->bindValue(param->getName(), localParam, paramNode->line_no)) {
 			report_ir_error(
 				"E1112",
 				paramNode != nullptr ? paramNode->line_no : (node != nullptr ? node->line_no : -1),
@@ -534,7 +534,7 @@ AllocaInst * IRGenerator::createEntryAlloca(Function * func, Type * type, const 
 	return alloca;
 }
 
-bool IRGenerator::ir_binary(ast_node * node, IRInstOperator op)
+bool IRGenerator::ir_binary(ast_node * node, BinaryEmitOp op)
 {
 	// 二元表达式统一采用“先算左、再算右、最后生成结果指令”的顺序
 	ast_node * leftNode = node->sons[0];
@@ -554,37 +554,37 @@ bool IRGenerator::ir_binary(ast_node * node, IRInstOperator op)
 	Value * rhs = emitRValue(right->val, "rhs");
 
 	switch (op) {
-		case IRInstOperator::IRINST_OP_ADD_I:
+		case BinaryEmitOp::Add:
 			node->val = builder.createAdd(lhs, rhs, "addtmp");
 			break;
-		case IRInstOperator::IRINST_OP_SUB_I:
+		case BinaryEmitOp::Sub:
 			node->val = builder.createSub(lhs, rhs, "subtmp");
 			break;
-		case IRInstOperator::IRINST_OP_MUL_I:
+		case BinaryEmitOp::Mul:
 			node->val = builder.createMul(lhs, rhs, "multmp");
 			break;
-		case IRInstOperator::IRINST_OP_DIV_I:
+		case BinaryEmitOp::Div:
 			node->val = builder.createSDiv(lhs, rhs, "divtmp");
 			break;
-		case IRInstOperator::IRINST_OP_MOD_I:
+		case BinaryEmitOp::Mod:
 			node->val = builder.createSRem(lhs, rhs, "modtmp");
 			break;
-		case IRInstOperator::IRINST_OP_CMP_EQ_I:
+		case BinaryEmitOp::Eq:
 			node->val = builder.createZExt(builder.createICmpEQ(lhs, rhs, "cmptmp"), IntegerType::getTypeInt(), "booltoint");
 			break;
-		case IRInstOperator::IRINST_OP_CMP_NE_I:
+		case BinaryEmitOp::Ne:
 			node->val = builder.createZExt(builder.createICmpNE(lhs, rhs, "cmptmp"), IntegerType::getTypeInt(), "booltoint");
 			break;
-		case IRInstOperator::IRINST_OP_CMP_LT_I:
+		case BinaryEmitOp::Lt:
 			node->val = builder.createZExt(builder.createICmpSLT(lhs, rhs, "cmptmp"), IntegerType::getTypeInt(), "booltoint");
 			break;
-		case IRInstOperator::IRINST_OP_CMP_LE_I:
+		case BinaryEmitOp::Le:
 			node->val = builder.createZExt(builder.createICmpSLE(lhs, rhs, "cmptmp"), IntegerType::getTypeInt(), "booltoint");
 			break;
-		case IRInstOperator::IRINST_OP_CMP_GT_I:
+		case BinaryEmitOp::Gt:
 			node->val = builder.createZExt(builder.createICmpSGT(lhs, rhs, "cmptmp"), IntegerType::getTypeInt(), "booltoint");
 			break;
-		case IRInstOperator::IRINST_OP_CMP_GE_I:
+		case BinaryEmitOp::Ge:
 			node->val = builder.createZExt(builder.createICmpSGE(lhs, rhs, "cmptmp"), IntegerType::getTypeInt(), "booltoint");
 			break;
 		default:
@@ -597,67 +597,67 @@ bool IRGenerator::ir_binary(ast_node * node, IRInstOperator op)
 // 整数加法AST节点翻译成线性中间IR
 bool IRGenerator::ir_add(ast_node * node)
 {
-	return ir_binary(node, IRInstOperator::IRINST_OP_ADD_I);
+	return ir_binary(node, BinaryEmitOp::Add);
 }
 
 // 整数减法AST节点翻译成线性中间IR
 bool IRGenerator::ir_sub(ast_node * node)
 {
-	return ir_binary(node, IRInstOperator::IRINST_OP_SUB_I);
+	return ir_binary(node, BinaryEmitOp::Sub);
 }
 
 // 整数乘法AST节点翻译成线性中间IR
 bool IRGenerator::ir_mul(ast_node * node)
 {
-	return ir_binary(node, IRInstOperator::IRINST_OP_MUL_I);
+	return ir_binary(node, BinaryEmitOp::Mul);
 }
 
 // 整数除法AST节点翻译成线性中间IR
 bool IRGenerator::ir_div(ast_node * node)
 {
-	return ir_binary(node, IRInstOperator::IRINST_OP_DIV_I);
+	return ir_binary(node, BinaryEmitOp::Div);
 }
 
 // 整数求余AST节点翻译成线性中间IR
 bool IRGenerator::ir_mod(ast_node * node)
 {
-	return ir_binary(node, IRInstOperator::IRINST_OP_MOD_I);
+	return ir_binary(node, BinaryEmitOp::Mod);
 }
 
 // 整数相等比较AST节点翻译成线性中间IR
 bool IRGenerator::ir_eq(ast_node * node)
 {
-	return ir_binary(node, IRInstOperator::IRINST_OP_CMP_EQ_I);
+	return ir_binary(node, BinaryEmitOp::Eq);
 }
 
 // 整数不等比较AST节点翻译成线性中间IR
 bool IRGenerator::ir_ne(ast_node * node)
 {
-	return ir_binary(node, IRInstOperator::IRINST_OP_CMP_NE_I);
+	return ir_binary(node, BinaryEmitOp::Ne);
 }
 
 // 整数小于比较AST节点翻译成线性中间IR
 bool IRGenerator::ir_lt(ast_node * node)
 {
-	return ir_binary(node, IRInstOperator::IRINST_OP_CMP_LT_I);
+	return ir_binary(node, BinaryEmitOp::Lt);
 }
 
 // 整数小于等于比较AST节点翻译成线性中间IR
 bool IRGenerator::ir_le(ast_node * node)
 {
-	return ir_binary(node, IRInstOperator::IRINST_OP_CMP_LE_I);
+	return ir_binary(node, BinaryEmitOp::Le);
 }
 
 // 整数大于比较AST节点翻译成线性中间IR
 bool IRGenerator::ir_gt(ast_node * node)
 {
-	return ir_binary(node, IRInstOperator::IRINST_OP_CMP_GT_I);
+	return ir_binary(node, BinaryEmitOp::Gt);
 }
 
 // 整数大于等于比较AST节点翻译成线性中间IR
 bool IRGenerator::ir_ge(ast_node * node)
 {
-	return ir_binary(node, IRInstOperator::IRINST_OP_CMP_GE_I);
+	return ir_binary(node, BinaryEmitOp::Ge);
 }
 
 // 逻辑非AST节点翻译成线性中间IR
@@ -951,7 +951,7 @@ bool IRGenerator::ir_variable_declare(ast_node * node)
 	}
 
 	AllocaInst * alloca = createEntryAlloca(module->getCurrentFunction(), node->sons[0]->type, node->sons[1]->name);
-	if (alloca == nullptr || !module->bindValue(node->sons[1]->name, alloca)) {
+	if (alloca == nullptr || !module->bindValue(node->sons[1]->name, alloca, node->sons[1]->line_no)) {
 		return false;
 	}
 	node->val = alloca;
@@ -1105,9 +1105,6 @@ bool IRGenerator::ir_function_call(ast_node * node)
 		report_ir_error("E1200", lineno, "语义检查", "函数(%s)未定义或未声明", funcName.c_str());
 		return false;
 	}
-
-	// 当前函数存在函数调用
-	currentFunc->setExistFuncCall(true);
 
 	auto & formalParams = calledFunction->getParams();
 	if (paramsNode->sons.size() != formalParams.size()) {

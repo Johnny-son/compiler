@@ -1,9 +1,18 @@
 #include "backend/include/InstructionSelector.h"
 
+#include <algorithm>
+#include <cctype>
 #include <utility>
 
+#include "BasicBlock.h"
+#include "Function.h"
 #include "ir/include/Type.h"
-#include "ir/Instructions/LabelInstruction.h"
+#include "ir/Instructions/AllocaInst.h"
+#include "ir/Instructions/BinaryInst.h"
+#include "ir/Instructions/GetElementPtrInst.h"
+#include "ir/Instructions/ICmpInst.h"
+#include "ir/Types/ArrayType.h"
+#include "ir/Types/PointerType.h"
 
 namespace {
 
@@ -16,6 +25,33 @@ constexpr const char * REG_T0 = "t0";
 constexpr const char * REG_T1 = "t1";
 constexpr const char * REG_T2 = "t2";
 constexpr const char * REG_T3 = "t3";
+constexpr const char * REG_T4 = "t4";
+
+Type * pointeeType(Value * value)
+{
+	if (value == nullptr) {
+		return nullptr;
+	}
+
+	auto * ptrType = dynamic_cast<PointerType *>(value->getType());
+	if (ptrType == nullptr) {
+		return value->getType();
+	}
+	return const_cast<Type *>(ptrType->getPointeeType());
+}
+
+std::string sanitizeLabelPart(std::string name)
+{
+	for (char & ch: name) {
+		if (ch == '.') {
+			continue;
+		}
+		if (!std::isalnum(static_cast<unsigned char>(ch)) && ch != '_') {
+			ch = '_';
+		}
+	}
+	return name;
+}
 
 } // namespace
 
@@ -25,48 +61,64 @@ InstructionSelector::InstructionSelector(IRFunctionView function, const Function
 
 AsmFunction InstructionSelector::run()
 {
-	for (const auto & inst: function.instructions()) {
-		translateInst(inst);
+	translateEntry();
+
+	bool firstBlock = true;
+	for (const auto & block: function.blocks()) {
+		translateBlock(block, firstBlock);
+		firstBlock = false;
 	}
 
 	return asmFunction;
 }
 
+void InstructionSelector::translateBlock(const IRBasicBlockView & block, bool isEntryBlock)
+{
+	if (!block.valid()) {
+		return;
+	}
+
+	if (!isEntryBlock) {
+		asmFunction.emitLabel(labelName(block.raw()));
+	}
+
+	for (const auto & inst: block.instructions()) {
+		translateInst(inst);
+	}
+}
+
 void InstructionSelector::translateInst(const IRInstView & inst)
 {
 	switch (inst.kind()) {
-		case IRInstKind::Entry:
-			translateEntry();
+		case IRInstKind::Alloca:
+			translateAlloca(inst);
 			break;
-		case IRInstKind::Exit:
-			translateExit(inst);
+		case IRInstKind::Load:
+			translateLoad(inst);
 			break;
-		case IRInstKind::Assign:
-			translateAssign(inst);
+		case IRInstKind::Store:
+			translateStore(inst);
 			break;
-		case IRInstKind::Add:
-			translateBinary(inst, "addw");
+		case IRInstKind::Binary:
+			translateBinary(inst);
 			break;
-		case IRInstKind::Sub:
-			translateBinary(inst, "subw");
+		case IRInstKind::ICmp:
+			translateICmp(inst);
 			break;
-		case IRInstKind::Mul:
-			translateBinary(inst, "mulw");
+		case IRInstKind::ZExt:
+			translateZExt(inst);
 			break;
-		case IRInstKind::Div:
-			translateBinary(inst, "divw");
+		case IRInstKind::GetElementPtr:
+			translateGEP(inst);
 			break;
-		case IRInstKind::Mod:
-			translateBinary(inst, "remw");
-			break;
-		case IRInstKind::FuncCall:
+		case IRInstKind::Call:
 			translateCall(inst);
 			break;
-		case IRInstKind::Label:
-			translateLabel(inst);
+		case IRInstKind::Branch:
+			translateBranch(inst);
 			break;
-		case IRInstKind::Goto:
-			translateGoto(inst);
+		case IRInstKind::Return:
+			translateReturn(inst);
 			break;
 		default:
 			break;
@@ -102,41 +154,154 @@ void InstructionSelector::translateEntry()
 	}
 }
 
-void InstructionSelector::translateExit(const IRInstView & inst)
+void InstructionSelector::translateAlloca(const IRInstView &)
 {
-	if (inst.operandCount() > 0) {
-		loadValue(inst.operand(0), REG_A[0]);
-	}
-
-	asmFunction.emitOp("ld", {AsmOperand::reg(REG_RA), AsmOperand::mem(REG_FP, FunctionFrameLayout::savedRaOffset)});
-	asmFunction.emitOp("ld", {AsmOperand::reg(REG_T0), AsmOperand::mem(REG_FP, FunctionFrameLayout::savedFpOffset)});
-	asmFunction.emitOp("mv", {AsmOperand::reg(REG_SP), AsmOperand::reg(REG_FP)});
-	asmFunction.emitOp("mv", {AsmOperand::reg(REG_FP), AsmOperand::reg(REG_T0)});
-	asmFunction.emitOp("ret");
+	// alloca 的空间已经由 FrameLayout 分配在当前函数栈帧中。
 }
 
-void InstructionSelector::translateAssign(const IRInstView & inst)
+void InstructionSelector::translateLoad(const IRInstView & inst)
+{
+	if (inst.operandCount() < 1 || !inst.hasResult()) {
+		return;
+	}
+
+	loadFromPointer(inst.operand(0), inst.type(), REG_T0);
+	storeValue(REG_T0, inst.result());
+}
+
+void InstructionSelector::translateStore(const IRInstView & inst)
 {
 	if (inst.operandCount() < 2) {
 		return;
 	}
 
-	const IRValueView dst = inst.operand(0);
-	const IRValueView src = inst.operand(1);
-	loadValue(src, REG_T0);
-	storeValue(REG_T0, dst);
+	const IRValueView value = inst.operand(0);
+	const IRValueView ptr = inst.operand(1);
+	loadValue(value, REG_T0);
+	storeToPointer(REG_T0, ptr, value.type());
 }
 
-void InstructionSelector::translateBinary(const IRInstView & inst, const std::string & opcode)
+void InstructionSelector::translateBinary(const IRInstView & inst)
 {
-	if (inst.operandCount() < 2 || !inst.hasResult()) {
+	auto * binaryInst = dynamic_cast<BinaryInst *>(inst.raw());
+	if (binaryInst == nullptr || inst.operandCount() < 2 || !inst.hasResult()) {
 		return;
+	}
+
+	const char * opcode = "addw";
+	switch (binaryInst->getBinaryOp()) {
+		case BinaryInst::Op::Add:
+			opcode = "addw";
+			break;
+		case BinaryInst::Op::Sub:
+			opcode = "subw";
+			break;
+		case BinaryInst::Op::Mul:
+			opcode = "mulw";
+			break;
+		case BinaryInst::Op::SDiv:
+			opcode = "divw";
+			break;
+		case BinaryInst::Op::SRem:
+			opcode = "remw";
+			break;
+		default:
+			return;
 	}
 
 	loadValue(inst.operand(0), REG_T0);
 	loadValue(inst.operand(1), REG_T1);
 	asmFunction.emitOp(opcode, {AsmOperand::reg(REG_T2), AsmOperand::reg(REG_T0), AsmOperand::reg(REG_T1)});
 	storeValue(REG_T2, inst.result());
+}
+
+void InstructionSelector::translateICmp(const IRInstView & inst)
+{
+	auto * cmpInst = dynamic_cast<ICmpInst *>(inst.raw());
+	if (cmpInst == nullptr || inst.operandCount() < 2 || !inst.hasResult()) {
+		return;
+	}
+
+	loadValue(inst.operand(0), REG_T0);
+	loadValue(inst.operand(1), REG_T1);
+
+	switch (cmpInst->getPredicate()) {
+		case ICmpInst::Predicate::EQ:
+			asmFunction.emitOp("xor", {AsmOperand::reg(REG_T2), AsmOperand::reg(REG_T0), AsmOperand::reg(REG_T1)});
+			asmFunction.emitOp("seqz", {AsmOperand::reg(REG_T2), AsmOperand::reg(REG_T2)});
+			break;
+		case ICmpInst::Predicate::NE:
+			asmFunction.emitOp("xor", {AsmOperand::reg(REG_T2), AsmOperand::reg(REG_T0), AsmOperand::reg(REG_T1)});
+			asmFunction.emitOp("snez", {AsmOperand::reg(REG_T2), AsmOperand::reg(REG_T2)});
+			break;
+		case ICmpInst::Predicate::SLT:
+			asmFunction.emitOp("slt", {AsmOperand::reg(REG_T2), AsmOperand::reg(REG_T0), AsmOperand::reg(REG_T1)});
+			break;
+		case ICmpInst::Predicate::SGT:
+			asmFunction.emitOp("slt", {AsmOperand::reg(REG_T2), AsmOperand::reg(REG_T1), AsmOperand::reg(REG_T0)});
+			break;
+		case ICmpInst::Predicate::SLE:
+			asmFunction.emitOp("slt", {AsmOperand::reg(REG_T2), AsmOperand::reg(REG_T1), AsmOperand::reg(REG_T0)});
+			asmFunction.emitOp("xori", {AsmOperand::reg(REG_T2), AsmOperand::reg(REG_T2), AsmOperand::immValue(1)});
+			break;
+		case ICmpInst::Predicate::SGE:
+			asmFunction.emitOp("slt", {AsmOperand::reg(REG_T2), AsmOperand::reg(REG_T0), AsmOperand::reg(REG_T1)});
+			asmFunction.emitOp("xori", {AsmOperand::reg(REG_T2), AsmOperand::reg(REG_T2), AsmOperand::immValue(1)});
+			break;
+	}
+
+	storeValue(REG_T2, inst.result());
+}
+
+void InstructionSelector::translateZExt(const IRInstView & inst)
+{
+	if (inst.operandCount() < 1 || !inst.hasResult()) {
+		return;
+	}
+
+	loadValue(inst.operand(0), REG_T0);
+	asmFunction.emitOp("andi", {AsmOperand::reg(REG_T0), AsmOperand::reg(REG_T0), AsmOperand::immValue(1)});
+	storeValue(REG_T0, inst.result());
+}
+
+void InstructionSelector::translateGEP(const IRInstView & inst)
+{
+	auto * gepInst = dynamic_cast<GetElementPtrInst *>(inst.raw());
+	if (gepInst == nullptr || !inst.hasResult()) {
+		return;
+	}
+
+	IRValueView base(gepInst->getBasePointer());
+	loadAddress(base, REG_T0);
+
+	Type * currentType = pointeeType(base.raw());
+	const auto indices = gepInst->getIndices();
+	for (std::size_t indexNo = 0; indexNo < indices.size(); ++indexNo) {
+		Type * scaledType = currentType;
+		if (indexNo > 0) {
+			if (auto * arrayType = dynamic_cast<ArrayType *>(currentType); arrayType != nullptr) {
+				scaledType = arrayType->getElementType();
+				currentType = scaledType;
+			}
+		}
+
+		const int32_t scale = scaledType != nullptr ? scaledType->getSize() : FunctionFrameLayout::stackSlotSize;
+		IRValueView indexValue(indices[indexNo]);
+		if (indexValue.isConstantInt()) {
+			const int32_t offset = indexValue.intValue() * scale;
+			if (offset != 0) {
+				asmFunction.emitOp("addi", {AsmOperand::reg(REG_T0), AsmOperand::reg(REG_T0), AsmOperand::immValue(offset)});
+			}
+			continue;
+		}
+
+		loadValue(indexValue, REG_T1);
+		asmFunction.emitOp("li", {AsmOperand::reg(REG_T2), AsmOperand::immValue(scale)});
+		asmFunction.emitOp("mul", {AsmOperand::reg(REG_T1), AsmOperand::reg(REG_T1), AsmOperand::reg(REG_T2)});
+		asmFunction.emitOp("add", {AsmOperand::reg(REG_T0), AsmOperand::reg(REG_T0), AsmOperand::reg(REG_T1)});
+	}
+
+	storeValue(REG_T0, inst.result());
 }
 
 void InstructionSelector::translateCall(const IRInstView & inst)
@@ -163,15 +328,29 @@ void InstructionSelector::translateCall(const IRInstView & inst)
 	}
 }
 
-void InstructionSelector::translateLabel(const IRInstView & inst)
+void InstructionSelector::translateBranch(const IRInstView & inst)
 {
-	auto * rawLabel = static_cast<LabelInstruction *>(inst.raw());
-	asmFunction.emitLabel(ensureLabelName(rawLabel));
+	if (!inst.isConditionalBranch()) {
+		asmFunction.emitOp("j", {AsmOperand::label(labelName(inst.targetBlockRaw()))});
+		return;
+	}
+
+	loadValue(inst.operand(0), REG_T0);
+	asmFunction.emitOp("bnez", {AsmOperand::reg(REG_T0), AsmOperand::label(labelName(inst.trueBlockRaw()))});
+	asmFunction.emitOp("j", {AsmOperand::label(labelName(inst.falseBlockRaw()))});
 }
 
-void InstructionSelector::translateGoto(const IRInstView & inst)
+void InstructionSelector::translateReturn(const IRInstView & inst)
 {
-	asmFunction.emitOp("j", {AsmOperand::label(ensureLabelName(inst.targetLabelRaw()))});
+	if (inst.operandCount() > 0) {
+		loadValue(inst.operand(0), REG_A[0]);
+	}
+
+	asmFunction.emitOp("ld", {AsmOperand::reg(REG_RA), AsmOperand::mem(REG_FP, FunctionFrameLayout::savedRaOffset)});
+	asmFunction.emitOp("ld", {AsmOperand::reg(REG_T0), AsmOperand::mem(REG_FP, FunctionFrameLayout::savedFpOffset)});
+	asmFunction.emitOp("mv", {AsmOperand::reg(REG_SP), AsmOperand::reg(REG_FP)});
+	asmFunction.emitOp("mv", {AsmOperand::reg(REG_FP), AsmOperand::reg(REG_T0)});
+	asmFunction.emitOp("ret");
 }
 
 void InstructionSelector::loadValue(const IRValueView & value, const std::string & reg)
@@ -183,6 +362,11 @@ void InstructionSelector::loadValue(const IRValueView & value, const std::string
 
 	if (value.isConstantInt()) {
 		asmFunction.emitOp("li", {AsmOperand::reg(reg), AsmOperand::immValue(value.intValue())});
+		return;
+	}
+
+	if (dynamic_cast<AllocaInst *>(value.raw()) != nullptr) {
+		loadAddress(value, reg);
 		return;
 	}
 
@@ -216,28 +400,96 @@ void InstructionSelector::storeValue(const std::string & reg, const IRValueView 
 	}
 }
 
+void InstructionSelector::loadAddress(const IRValueView & value, const std::string & reg)
+{
+	if (!value.valid()) {
+		asmFunction.emitOp("mv", {AsmOperand::reg(reg), AsmOperand::reg(REG_ZERO)});
+		return;
+	}
+
+	if (value.isGlobalVariable()) {
+		loadAddressOfGlobal(value, reg);
+		return;
+	}
+
+	auto * allocaInst = dynamic_cast<AllocaInst *>(value.raw());
+	if (allocaInst != nullptr) {
+		const auto * slot = slotOf(value);
+		if (slot != nullptr) {
+			asmFunction.emitOp("addi", {AsmOperand::reg(reg), AsmOperand::reg(REG_FP), AsmOperand::immValue(slot->offset)});
+		}
+		return;
+	}
+
+	loadValue(value, reg);
+}
+
+void InstructionSelector::loadFromPointer(const IRValueView & ptr, Type * valueType, const std::string & reg)
+{
+	if (dynamic_cast<AllocaInst *>(ptr.raw()) != nullptr) {
+		const auto * slot = slotOf(ptr);
+		if (slot != nullptr) {
+			asmFunction.emitOp(loadOpcode(valueType), {AsmOperand::reg(reg), AsmOperand::mem(REG_FP, slot->offset)});
+		}
+		return;
+	}
+
+	if (ptr.isGlobalVariable()) {
+		loadAddressOfGlobal(ptr, REG_T3);
+		asmFunction.emitOp(loadOpcode(valueType), {AsmOperand::reg(reg), AsmOperand::mem(REG_T3, 0)});
+		return;
+	}
+
+	loadValue(ptr, REG_T3);
+	asmFunction.emitOp(loadOpcode(valueType), {AsmOperand::reg(reg), AsmOperand::mem(REG_T3, 0)});
+}
+
+void InstructionSelector::storeToPointer(const std::string & reg, const IRValueView & ptr, Type * valueType)
+{
+	if (dynamic_cast<AllocaInst *>(ptr.raw()) != nullptr) {
+		const auto * slot = slotOf(ptr);
+		if (slot != nullptr) {
+			asmFunction.emitOp(storeOpcode(valueType), {AsmOperand::reg(reg), AsmOperand::mem(REG_FP, slot->offset)});
+		}
+		return;
+	}
+
+	if (ptr.isGlobalVariable()) {
+		loadAddressOfGlobal(ptr, REG_T3);
+		asmFunction.emitOp(storeOpcode(valueType), {AsmOperand::reg(reg), AsmOperand::mem(REG_T3, 0)});
+		return;
+	}
+
+	loadValue(ptr, REG_T3);
+	asmFunction.emitOp(storeOpcode(valueType), {AsmOperand::reg(reg), AsmOperand::mem(REG_T3, 0)});
+}
+
 void InstructionSelector::loadAddressOfGlobal(const IRValueView & value, const std::string & reg)
 {
 	asmFunction.emitOp("la", {AsmOperand::reg(reg), AsmOperand::symbol(value.name())});
 }
 
-std::string InstructionSelector::ensureLabelName(LabelInstruction * label)
+std::string InstructionSelector::labelName(BasicBlock * block)
 {
-	if (label == nullptr) {
+	if (block == nullptr) {
 		return ".L_invalid";
 	}
 
-	auto iter = labelNames.find(label);
-	if (iter != labelNames.end()) {
+	if (block == function.raw()->getEntryBlock()) {
+		return function.name();
+	}
+
+	auto iter = blockLabels.find(block);
+	if (iter != blockLabels.end()) {
 		return iter->second;
 	}
 
-	std::string name = label->getIRName();
-	if (name.empty()) {
-		name = ".L_" + function.name() + "_" + std::to_string(nextLabelIndex++);
+	std::string name = ".L_" + sanitizeLabelPart(function.name()) + "_" + sanitizeLabelPart(block->getIRName());
+	if (name == ".L_" + sanitizeLabelPart(function.name()) + "_") {
+		name += std::to_string(nextLabelIndex++);
 	}
 
-	labelNames.insert({label, name});
+	blockLabels.insert({block, name});
 	return name;
 }
 

@@ -229,7 +229,7 @@ ConstInt * Module::findConstInt(int32_t val)
 }
 
 /// @brief 在当前的作用域中查找，若没有查找到则创建局部变量或者全局变量。请注意不能创建临时变量
-/// ! 该函数只有在AST遍历生成线性IR中使用，其它地方不能使用
+/// ! 该函数只有在AST遍历生成MiniLLVM IR中使用，其它地方不能使用
 /// @param type 变量类型
 /// @param name 变量ID 局部变量时可以为空，目的为了SSA时创建临时的局部变量
 /// @param lineno 变量定义所在的行号，传入 -1 表示无有效行号
@@ -260,15 +260,8 @@ Value * Module::newVarValue(Type * type, const std::string & name, int64_t linen
 	}
 
 	if (currentFunc) {
-		// 获取变量作用域的层级
-		int32_t scope_level;
-		if (name.empty()) {
-			scope_level = 1;
-		} else {
-			scope_level = scopeStack->getCurrentScopeLevel();
-		}
-
-		retVal = currentFunc->newLocalVarValue(type, name, scope_level);
+		report_module_error("E1402", lineno, "符号检查", "局部变量应通过IRBuilder创建alloca");
+		return nullptr;
 	} else {
 		retVal = newGlobalVariable(type, name);
 	}
@@ -280,7 +273,7 @@ Value * Module::newVarValue(Type * type, const std::string & name, int64_t linen
 }
 
 /// @brief 查找变量，会根据作用域栈进行逐级查找。
-/// ! 该函数只有在AST遍历生成线性IR中使用，其它地方不能使用
+/// ! 该函数只有在AST遍历生成MiniLLVM IR中使用，其它地方不能使用
 ///
 /// @param name 变量ID
 /// @return 指针有效则找到，空指针未找到
@@ -292,12 +285,13 @@ Value * Module::findVarValue(std::string name)
 	return tempValue;
 }
 
-bool Module::bindValue(const std::string & name, Value * value)
+bool Module::bindValue(const std::string & name, Value * value, int64_t lineno)
 {
 	if (name.empty() || value == nullptr) {
 		return false;
 	}
 	if (scopeStack->findCurrentScope(name) != nullptr) {
+		report_module_error("E1400", lineno, "符号检查", "变量(%s)已经存在", name.c_str());
 		return false;
 	}
 
@@ -369,8 +363,7 @@ void Module::Delete()
 ///
 void Module::renameIR()
 {
-	// 全局变量目前都有名字，目前不存在没有名字的变量，因此
-	// 对于全局变量的线性IR名称，只是在原来的名称前追加@即可
+	// MiniLLVM路径在构造Value时已经完成命名。
 
 	// 遍历所有的函数，含局部变量名、形参、Label名、指令变量重命名
 	for (auto func: funcVector) {

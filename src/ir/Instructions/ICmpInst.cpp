@@ -28,7 +28,7 @@ const char * predicateName(ICmpInst::Predicate predicate)
 } // namespace
 
 ICmpInst::ICmpInst(Function * func, Predicate predicate, Value * lhs, Value * rhs, const std::string & name)
-	: Instruction(func, IRInstOperator::IRINST_OP_MAX, IntegerType::getTypeBool()), predicate(predicate)
+	: Instruction(func, IntegerType::getTypeBool()), predicate(predicate)
 {
 	this->IRName = name;
 	addOperand(lhs);

@@ -7,10 +7,10 @@
 
 class Module;
 class Function;
+class BasicBlock;
 class Instruction;
 class Value;
 class Type;
-class LabelInstruction;
 
 enum class IRValueKind : std::int8_t {
 	Invalid,
@@ -18,26 +18,23 @@ enum class IRValueKind : std::int8_t {
 	GlobalVariable,
 	Function,
 	FormalParam,
-	LocalVariable,
-	MemoryVariable,
 	InstructionResult,
 	Unknown
 };
 
 enum class IRInstKind : std::int8_t {
 	Invalid,
-	Entry,
-	Exit,
-	Label,
-	Goto,
-	Add,
-	Sub,
-	Mul,
-	Div,
-	Mod,
-	Assign,
-	FuncCall,
-	Arg,
+	Alloca,
+	Load,
+	Store,
+	Binary,
+	ICmp,
+	ZExt,
+	GetElementPtr,
+	Call,
+	Phi,
+	Branch,
+	Return,
 	Unknown
 };
 
@@ -55,8 +52,6 @@ public:
 	[[nodiscard]] bool isGlobalVariable() const;
 	[[nodiscard]] bool isFunction() const;
 	[[nodiscard]] bool isFormalParam() const;
-	[[nodiscard]] bool isLocalVariable() const;
-	[[nodiscard]] bool isMemoryVariable() const;
 	[[nodiscard]] bool isInstructionResult() const;
 	[[nodiscard]] std::string name() const;
 	[[nodiscard]] std::string irName() const;
@@ -84,10 +79,29 @@ public:
 	[[nodiscard]] std::vector<IRValueView> operands() const;
 	[[nodiscard]] Function * calledFunctionRaw() const;
 	[[nodiscard]] std::string calledFunctionName() const;
-	[[nodiscard]] LabelInstruction * targetLabelRaw() const;
+	[[nodiscard]] bool isConditionalBranch() const;
+	[[nodiscard]] BasicBlock * targetBlockRaw() const;
+	[[nodiscard]] BasicBlock * trueBlockRaw() const;
+	[[nodiscard]] BasicBlock * falseBlockRaw() const;
 
 private:
 	Instruction * inst = nullptr;
+};
+
+class IRBasicBlockView {
+
+public:
+	IRBasicBlockView() = default;
+	explicit IRBasicBlockView(BasicBlock * block);
+
+	[[nodiscard]] bool valid() const;
+	[[nodiscard]] BasicBlock * raw() const;
+	[[nodiscard]] std::string name() const;
+	[[nodiscard]] std::string irName() const;
+	[[nodiscard]] std::vector<IRInstView> instructions() const;
+
+private:
+	BasicBlock * block = nullptr;
 };
 
 class IRFunctionView {
@@ -103,7 +117,7 @@ public:
 	[[nodiscard]] Type * returnType() const;
 	[[nodiscard]] bool isBuiltin() const;
 	[[nodiscard]] std::vector<IRValueView> params() const;
-	[[nodiscard]] std::vector<IRValueView> locals() const;
+	[[nodiscard]] std::vector<IRBasicBlockView> blocks() const;
 	[[nodiscard]] std::vector<IRInstView> instructions() const;
 
 private:

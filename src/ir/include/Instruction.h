@@ -6,72 +6,6 @@
 
 class Function;
 
-/// @brief IR指令操作码
-enum class IRInstOperator : std::int8_t {
-
-	/// @brief 函数入口指令，对应函数的prologue，用户栈空间分配、寄存器保护等
-	IRINST_OP_ENTRY,
-
-	/// @brief 函数出口指令，对应函数的epilogue，用于栈空间的恢复与清理、寄存器恢复等
-	IRINST_OP_EXIT,
-
-	/// @brief Label指令，用于语句的跳转
-	IRINST_OP_LABEL,
-
-	/// @brief 无条件分支指令
-	IRINST_OP_GOTO,
-
-	/// @brief 整数的加法指令，二元运算
-	IRINST_OP_ADD_I,
-
-	/// @brief 整数的减法指令，二元运算
-	IRINST_OP_SUB_I,
-
-	/// @brief 整数的乘法指令，二元运算
-	IRINST_OP_MUL_I,
-
-	/// @brief 整数的除法指令，二元运算
-	IRINST_OP_DIV_I,
-
-	/// @brief 整数的求余指令，二元运算
-	IRINST_OP_MOD_I,
-
-	/// @brief 整数相等比较指令，结果为0/1
-	IRINST_OP_CMP_EQ_I,
-
-	/// @brief 整数不等比较指令，结果为0/1
-	IRINST_OP_CMP_NE_I,
-
-	/// @brief 整数小于比较指令，结果为0/1
-	IRINST_OP_CMP_LT_I,
-
-	/// @brief 整数小于等于比较指令，结果为0/1
-	IRINST_OP_CMP_LE_I,
-
-	/// @brief 整数大于比较指令，结果为0/1
-	IRINST_OP_CMP_GT_I,
-
-	/// @brief 整数大于等于比较指令，结果为0/1
-	IRINST_OP_CMP_GE_I,
-
-	/// @brief 赋值指令，一元运算
-	IRINST_OP_ASSIGN,
-
-	/// @brief 条件跳转指令，cond!=0时跳转true标签，否则跳转false标签
-	IRINST_OP_COND_BR,
-
-	/// @brief 函数调用，多目运算，个数不限
-	IRINST_OP_FUNC_CALL,
-
-	/// @brief 实参ARG指令，单目运算
-	IRINST_OP_ARG,
-
-	/* 后续可追加其他的IR指令 */
-
-	/// @brief 最大指令码，也是无效指令
-	IRINST_OP_MAX
-};
-
 ///
 /// @brief IR指令的基类, 指令自带值，也就是常说的临时变量
 ///
@@ -79,16 +13,11 @@ class Instruction : public User {
 
 public:
 	/// @brief 构造函数
-	/// @param op
 	/// @param result
-	explicit Instruction(Function * _func, IRInstOperator op, Type * _type);
+	explicit Instruction(Function * _func, Type * _type);
 
 	/// @brief 析构函数
 	virtual ~Instruction() = default;
-
-	/// @brief 获取指令操作码
-	/// @return 指令操作码
-	IRInstOperator getOp();
 
 	///
 	/// @brief 转换成IR指令文本形式
@@ -187,11 +116,6 @@ public:
 	}
 
 protected:
-	///
-	/// @brief IR指令操作码
-	///
-	enum IRInstOperator op = IRInstOperator::IRINST_OP_MAX;
-
 	///
 	/// @brief 是否是Dead指令
 	///

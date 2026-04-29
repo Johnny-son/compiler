@@ -4,10 +4,10 @@
 
 #include "ir/Types/VoidType.h"
 
-ReturnInst::ReturnInst(Function * func) : Instruction(func, IRInstOperator::IRINST_OP_MAX, VoidType::getType())
+ReturnInst::ReturnInst(Function * func) : Instruction(func, VoidType::getType())
 {}
 
-ReturnInst::ReturnInst(Function * func, Value * value) : Instruction(func, IRInstOperator::IRINST_OP_MAX, VoidType::getType())
+ReturnInst::ReturnInst(Function * func, Value * value) : Instruction(func, VoidType::getType())
 {
 	addOperand(value);
 }

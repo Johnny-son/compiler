@@ -32,7 +32,7 @@ const char * opName(BinaryInst::Op op)
 } // namespace
 
 BinaryInst::BinaryInst(Function * func, Op op, Value * lhs, Value * rhs, const std::string & name)
-	: Instruction(func, IRInstOperator::IRINST_OP_MAX, lhs->getType()), binaryOp(op)
+	: Instruction(func, lhs->getType()), binaryOp(op)
 {
 	this->IRName = name;
 	addOperand(lhs);

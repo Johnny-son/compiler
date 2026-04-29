@@ -3,7 +3,7 @@
 #include "ZExtInst.h"
 
 ZExtInst::ZExtInst(Function * func, Value * value, Type * targetType, const std::string & name)
-	: Instruction(func, IRInstOperator::IRINST_OP_MAX, targetType)
+	: Instruction(func, targetType)
 {
 	this->IRName = name;
 	addOperand(value);

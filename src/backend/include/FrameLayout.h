@@ -12,13 +12,13 @@ enum class StackObjectKind : std::int8_t {
 	SavedReturnAddress,
 	SavedFramePointer,
 	FormalParam,
-	LocalVariable,
+	AllocaObject,
 	InstructionResult,
 	OutgoingArgArea
 };
 
 struct StackSlotInfo {
-	StackObjectKind kind = StackObjectKind::LocalVariable;
+	StackObjectKind kind = StackObjectKind::AllocaObject;
 	Value * value = nullptr;
 	std::string name;
 	int32_t offset = 0;

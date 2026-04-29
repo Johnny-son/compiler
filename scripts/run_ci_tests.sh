@@ -355,9 +355,12 @@ parse_expected_errors() {
 parse_expected_errors_to_array() {
   local case_file="$1"
   local -a result=()
-  local -r -a raw_errors=()
+  local -a raw_errors=()
+  local item
 
-  mapfile -t raw_errors < <(parse_expected_errors "${case_file}")
+  while IFS= read -r item; do
+    raw_errors+=("${item}")
+  done < <(parse_expected_errors "${case_file}")
   for item in "${raw_errors[@]}"; do
     [[ -n "${item}" ]] && result+=("${item}")
   done
@@ -519,7 +522,10 @@ run_err_suite() {
   for case_file in "${CASES[@]}"; do
     case_name="$(basename "${case_file}" .c)"
 
-    mapfile -t raw_errors < <(parse_expected_errors "${case_file}")
+    raw_errors=()
+    while IFS= read -r expected_err; do
+      raw_errors+=("${expected_err}")
+    done < <(parse_expected_errors "${case_file}")
     errors=()
     for item in "${raw_errors[@]}"; do
       [[ -n "${item}" ]] && errors+=("${item}")

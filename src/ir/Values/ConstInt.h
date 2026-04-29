@@ -3,7 +3,6 @@
 #pragma once
 
 #include "Constant.h"
-#include "IRConstant.h"
 #include "ir/Types/IntegerType.h"
 
 ///

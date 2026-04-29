@@ -5,8 +5,7 @@
 #include "ir/Types/PointerType.h"
 
 AllocaInst::AllocaInst(Function * func, Type * allocatedType, const std::string & name)
-	: Instruction(func, IRInstOperator::IRINST_OP_MAX, const_cast<PointerType *>(PointerType::get(allocatedType))),
-	  allocatedType(allocatedType)
+	: Instruction(func, const_cast<PointerType *>(PointerType::get(allocatedType))), allocatedType(allocatedType)
 {
 	this->IRName = name;
 }

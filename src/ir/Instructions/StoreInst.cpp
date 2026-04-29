@@ -6,7 +6,7 @@
 #include "ir/Values/GlobalVariable.h"
 
 StoreInst::StoreInst(Function * func, Value * value, Value * ptr)
-	: Instruction(func, IRInstOperator::IRINST_OP_MAX, VoidType::getType())
+	: Instruction(func, VoidType::getType())
 {
 	addOperand(value);
 	addOperand(ptr);

@@ -12,6 +12,9 @@ public:
 	BranchInst(Function * func, Value * cond, BasicBlock * trueTarget, BasicBlock * falseTarget);
 
 	bool isConditional() const;
+	BasicBlock * getTrueTarget() const;
+	BasicBlock * getFalseTarget() const;
+	BasicBlock * getTarget() const;
 	bool isTerminator() const override;
 	void toString(std::string & str) override;
 

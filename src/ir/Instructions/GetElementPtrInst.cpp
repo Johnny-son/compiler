@@ -37,7 +37,6 @@ GetElementPtrInst::GetElementPtrInst(
 	Function * func, Value * basePtr, const std::vector<Value *> & indices, const std::string & name)
 	: Instruction(
 		  func,
-		  IRInstOperator::IRINST_OP_MAX,
 		  const_cast<PointerType *>(PointerType::get(inferResultElementType(basePtr, indices.size()))))
 {
 	this->IRName = name;

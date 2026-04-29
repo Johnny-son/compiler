@@ -10,6 +10,20 @@
 
 class BasicBlock;
 
+enum class BinaryEmitOp {
+	Add,
+	Sub,
+	Mul,
+	Div,
+	Mod,
+	Eq,
+	Ne,
+	Lt,
+	Le,
+	Gt,
+	Ge
+};
+
 class IRGenerator {
 public:
 	// 构造函数
@@ -101,7 +115,7 @@ protected:
 	bool ir_function_body(ast_node * node);
 
 	// 通用二元AST节点翻译成线性中间IR
-	bool ir_binary(ast_node * node, IRInstOperator op);
+	bool ir_binary(ast_node * node, BinaryEmitOp op);
 
 	Value * emitRValue(Value * value, const std::string & name = "");
 	Value * emitCondValue(Value * value);

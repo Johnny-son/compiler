@@ -6,11 +6,11 @@
 #include "ir/Types/VoidType.h"
 
 BranchInst::BranchInst(Function * func, BasicBlock * target)
-	: Instruction(func, IRInstOperator::IRINST_OP_MAX, VoidType::getType()), trueTarget(target)
+	: Instruction(func, VoidType::getType()), trueTarget(target)
 {}
 
 BranchInst::BranchInst(Function * func, Value * cond, BasicBlock * trueTarget, BasicBlock * falseTarget)
-	: Instruction(func, IRInstOperator::IRINST_OP_MAX, VoidType::getType()), trueTarget(trueTarget), falseTarget(falseTarget)
+	: Instruction(func, VoidType::getType()), trueTarget(trueTarget), falseTarget(falseTarget)
 {
 	addOperand(cond);
 }
@@ -18,6 +18,21 @@ BranchInst::BranchInst(Function * func, Value * cond, BasicBlock * trueTarget, B
 bool BranchInst::isConditional() const
 {
 	return falseTarget != nullptr;
+}
+
+BasicBlock * BranchInst::getTrueTarget() const
+{
+	return trueTarget;
+}
+
+BasicBlock * BranchInst::getFalseTarget() const
+{
+	return falseTarget;
+}
+
+BasicBlock * BranchInst::getTarget() const
+{
+	return trueTarget;
 }
 
 bool BranchInst::isTerminator() const
