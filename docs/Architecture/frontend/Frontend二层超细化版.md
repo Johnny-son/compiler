@@ -171,7 +171,7 @@ ASTGenerator::run
 ```text
 run
   -> visitCompUnit
-     -> visitVarDecl / visitFuncDef
+     -> visitVarDecl / visitConstDecl / visitFuncDef
         -> visitFuncFParams / visitBlock
            -> visitBlockItemList -> visitStatement
               -> visitIfStatement / visitWhileStatement / visitBreakStatement / visitContinueStatement
@@ -181,8 +181,9 @@ run
 
 修改建议：
 
-- 新语法继续沿“文法分层 + 左结合构树”扩，关系/逻辑表达式保持与 `add/mul` 同一套路。
+- 新语法继续沿”文法分层 + 左结合构树”扩，关系/逻辑表达式保持与 `add/mul` 同一套路。
 - `visitCompUnit` 必须保留源码顺序，避免把全局声明和函数定义重排。
+- `visitBlockItem` 需要同时处理 `statement | varDecl | constDecl`。
 
 常见坑位：
 

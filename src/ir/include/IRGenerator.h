@@ -89,6 +89,9 @@ protected:
 	// 变量定声明节点翻译成线性中间IR
 	bool ir_variable_declare(ast_node * node);
 
+	// 常量声明节点翻译成线性中间IR
+	bool ir_const_declaration(ast_node * node);
+
 	// 计算全局变量初始化的常量整数表达式
 	bool eval_global_const_expr(ast_node * node, int32_t & value);
 

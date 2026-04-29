@@ -112,6 +112,7 @@ IRGenerator::IRGenerator(ast_node * _root, Module * _module) : root(_root), modu
 	/* 变量定义语句 */
 	ast2ir_handlers[ast_operator_type::AST_OP_DECL_STMT] = &IRGenerator::ir_declare_statment;
 	ast2ir_handlers[ast_operator_type::AST_OP_VAR_DECL] = &IRGenerator::ir_variable_declare;
+	ast2ir_handlers[ast_operator_type::AST_OP_CONST_DECL] = &IRGenerator::ir_const_declaration;
 
 	/* 语句块 */
 	ast2ir_handlers[ast_operator_type::AST_OP_BLOCK] = &IRGenerator::ir_block;
@@ -873,6 +874,17 @@ bool IRGenerator::ir_assign(ast_node * node)
 		return false;
 	}
 
+	// 检查左侧是否为常量
+	if (left->val && left->val->isConst()) {
+		report_ir_error(
+			"E1303",
+			son1_node->line_no,
+			"常量赋值",
+			"常量(%s)不能被重新赋值",
+			son1_node->name.c_str());
+		return false;
+	}
+
 	// 这里只处理整型的数据，如需支持实数，则需要针对类型进行处理
 
 	MoveInstruction * movInst = new MoveInstruction(module->getCurrentFunction(), left->val, right->val);
@@ -895,8 +907,12 @@ bool IRGenerator::ir_declare_statment(ast_node * node)
 
 	for (auto & child: node->sons) {
 
-		// 遍历每个变量声明
-		result = ir_variable_declare(child);
+		// 遍历声明项：普通变量与常量分别走各自语义路径
+		if (child != nullptr && child->node_type == ast_operator_type::AST_OP_CONST_DECL) {
+			result = ir_const_declaration(child);
+		} else {
+			result = ir_variable_declare(child);
+		}
 		if (!result) {
 			break;
 		}
@@ -953,6 +969,70 @@ bool IRGenerator::ir_variable_declare(ast_node * node)
 	}
 
 	ast_node * init_node = ir_visit_ast_node(init_expr);
+	if (!init_node) {
+		return false;
+	}
+
+	node->blockInsts.addInst(init_node->blockInsts);
+	node->blockInsts.addInst(new MoveInstruction(module->getCurrentFunction(), node->val, init_node->val));
+
+	return true;
+}
+
+// 常量声明节点翻译成线性中间IR
+bool IRGenerator::ir_const_declaration(ast_node * node)
+{
+	// 常量声明与变量声明结构类似，但 isConst 标志为 true
+	// 第一个孩子是类型，第二个孩子是变量名，第三个孩子是初始化表达式
+
+	if (node->sons.size() < 3) {
+		report_ir_error(
+			"E1304",
+			node->sons[1] != nullptr ? node->sons[1]->line_no : -1,
+			"常量定义",
+			"常量(%s)定义时必须初始化",
+			node->sons[1] != nullptr ? node->sons[1]->name.c_str() : "unknown");
+		return false;
+	}
+
+	node->val = module->newVarValue(node->sons[0]->type, node->sons[1]->name, node->sons[1]->line_no);
+	if (node->val == nullptr) {
+		return false;
+	}
+
+	// 标记为常量
+	node->val->setConst(true);
+
+	if (module->getCurrentFunction() == nullptr) {
+		// 全局常量
+		int32_t init_value = 0;
+		if (!eval_global_const_expr(node->sons[2], init_value)) {
+			report_ir_error(
+				"E1301",
+				node->sons[1] != nullptr ? node->sons[1]->line_no : -1,
+				"全局初始化",
+				"全局常量(%s)初始化目前只支持常量整数表达式",
+				node->sons[1]->name.c_str());
+			return false;
+		}
+
+		auto * global_var = dynamic_cast<GlobalVariable *>(node->val);
+		if (global_var == nullptr) {
+			report_ir_error(
+				"E1302",
+				node->sons[1] != nullptr ? node->sons[1]->line_no : -1,
+				"全局初始化",
+				"全局常量(%s)初始化失败",
+				node->sons[1]->name.c_str());
+			return false;
+		}
+
+		global_var->setInitializer(init_value);
+		return true;
+	}
+
+	// 局部常量
+	ast_node * init_node = ir_visit_ast_node(node->sons[2]);
 	if (!init_node) {
 		return false;
 	}

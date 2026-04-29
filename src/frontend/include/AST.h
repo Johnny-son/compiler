@@ -80,6 +80,8 @@ enum class ast_operator_type : int {
 	// 变量声明
 	AST_OP_VAR_DECL,
 
+	// 常量声明
+	AST_OP_CONST_DECL,
 	// 二元运算符+
 	AST_OP_ADD,
 
@@ -244,6 +246,12 @@ public:
 	/// @return ast_node* 变量声明语句节点
 	static ast_node * add_var_decl_node(ast_node * stmt_node, var_id_attr & id);
 
+	// 创建常量声明节点
+	// type 变量的类型
+	// id 变量的名字
+	/// @return ast_node* 常量声明节点
+	static ast_node * create_const_decl_node(Type * type, var_id_attr & id);
+
 	// 释放节点
 	static void Delete(ast_node * node);
 
@@ -307,4 +315,6 @@ public:
 	// 在进入block等节点时是否要进行作用域管理。默认要做。
 	///
 	bool needScope = true;
-};
+
+	// 标记该变量声明是否为常量
+	bool isConst = false;};

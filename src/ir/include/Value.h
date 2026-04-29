@@ -32,6 +32,11 @@ protected:
 	///
 	std::vector<Use *> uses;
 
+	///
+	/// @brief 常量标志
+	///
+	bool isConstFlag = false;
+
 public:
 	/// @brief 构造函数
 	/// @param _type
@@ -128,4 +133,17 @@ public:
 	/// @return int32_t 寄存器编号
 	///
 	virtual void setLoadRegId(int32_t regId);
+
+	///
+	/// @brief 设置常量标志
+	/// @param isConst 是否为常量
+	///
+	virtual void setConst(bool isConst);
+
+	///
+	/// @brief 获取常量标志
+	/// @return true 是常量
+	/// @return false 不是常量
+	///
+	[[nodiscard]] virtual bool isConst() const;
 };

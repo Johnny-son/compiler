@@ -52,7 +52,7 @@ ast_node * MiniCCSTVisitor::run(MiniCParser::CompUnitContext * root)
 // 非终结运算符compUnit的遍历
 std::any MiniCCSTVisitor::visitCompUnit(MiniCParser::CompUnitContext * ctx)
 {
-	// compUnit: (funcDef | varDecl)* EOF
+	// compUnit: (funcDef | varDecl | constDecl)* EOF
 	ast_node * compUnitNode = ast_node::New(ast_operator_type::AST_OP_COMPILE_UNIT);
 
 	// 按照源码出现顺序收集顶层声明和函数定义，避免前端阶段重排
@@ -62,6 +62,9 @@ std::any MiniCCSTVisitor::visitCompUnit(MiniCParser::CompUnitContext * ctx)
 			(void) compUnitNode->insert_son_node(tempNode);
 		} else if (auto * funcCtx = dynamic_cast<MiniCParser::FuncDefContext *>(child); funcCtx != nullptr) {
 			auto * tempNode = std::any_cast<ast_node *>(visitFuncDef(funcCtx));
+			(void) compUnitNode->insert_son_node(tempNode);
+		} else if (auto * constCtx = dynamic_cast<MiniCParser::ConstDeclContext *>(child); constCtx != nullptr) {
+			auto * tempNode = std::any_cast<ast_node *>(visitConstDecl(constCtx));
 			(void) compUnitNode->insert_son_node(tempNode);
 		}
 	}
@@ -156,13 +159,15 @@ std::any MiniCCSTVisitor::visitBlockItemList(MiniCParser::BlockItemListContext *
 // 非终结运算符blockItem的遍历
 std::any MiniCCSTVisitor::visitBlockItem(MiniCParser::BlockItemContext * ctx)
 {
-	// 识别的文法产生式：blockItem : statement | varDecl
+	// 识别的文法产生式：blockItem : statement | varDecl | constDecl
 	if (ctx->statement()) {
 		// 语句识别
 
 		return visitStatement(ctx->statement());
 	} else if (ctx->varDecl()) {
 		return visitVarDecl(ctx->varDecl());
+	} else if (ctx->constDecl()) {
+		return visitConstDecl(ctx->constDecl());
 	}
 
 	return (ast_node *) nullptr;
@@ -644,6 +649,42 @@ std::any MiniCCSTVisitor::visitVarDef(MiniCParser::VarDefContext * ctx)
 	int64_t lineNo = (int64_t) ctx->T_ID()->getSymbol()->getLine();
 
 	return ast_node::New(varId, lineNo);
+}
+
+std::any MiniCCSTVisitor::visitConstDecl(MiniCParser::ConstDeclContext * ctx)
+{
+	// constDecl: T_CONST basicType constDef (T_COMMA constDef)* T_SEMICOLON;
+
+	// 声明语句节点
+	ast_node * stmt_node = ast_node::New(ast_operator_type::AST_OP_DECL_STMT);
+
+	// 类型节点
+	type_attr typeAttr = std::any_cast<type_attr>(visitBasicType(ctx->basicType()));
+
+	for (auto & constCtx: ctx->constDef()) {
+		// 获取行号
+		int64_t lineNo = (int64_t) constCtx->T_ID()->getSymbol()->getLine();
+
+		// 创建标识符节点
+		ast_node * id_node = ast_node::New(constCtx->T_ID()->getText(), lineNo);
+
+		// 创建类型节点
+		ast_node * type_node = ast_node::create_type_node(typeAttr);
+
+		// 创建常量定义节点
+		ast_node * decl_node = ast_node::New(ast_operator_type::AST_OP_CONST_DECL, type_node, id_node);
+		decl_node->type = type_node->type;
+		decl_node->isConst = true;
+
+		// 初始化表达式
+		ast_node * init_node = std::any_cast<ast_node *>(visitExpr(constCtx->expr()));
+		(void) decl_node->insert_son_node(init_node);
+
+		// 插入到常量声明语句
+		(void) stmt_node->insert_son_node(decl_node);
+	}
+
+	return stmt_node;
 }
 
 std::any MiniCCSTVisitor::visitBasicType(MiniCParser::BasicTypeContext * ctx)

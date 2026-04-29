@@ -12,7 +12,7 @@ grammar MiniC;
 // 语法规则描述：EBNF范式
 
 // 源文件编译单元定义
-compUnit: (funcDef | varDecl)* EOF;
+compUnit: (funcDef | varDecl | constDecl)* EOF;
 
 // 函数定义，目前支持int返回类型和int标量形参
 funcDef: T_INT T_ID T_L_PAREN funcFParams? T_R_PAREN block;
@@ -30,7 +30,7 @@ block: T_L_BRACE blockItemList? T_R_BRACE;
 blockItemList: blockItem+;
 
 // 每个Item可以是一个语句，或者变量声明语句
-blockItem: statement | varDecl;
+blockItem: statement | varDecl | constDecl;
 
 // 变量声明，支持可选初始化
 varDecl: basicType varDef (T_COMMA varDef)* T_SEMICOLON;
@@ -38,6 +38,11 @@ varDecl: basicType varDef (T_COMMA varDef)* T_SEMICOLON;
 // 基本类型
 basicType: T_INT;
 
+// 常量声明
+constDecl: T_CONST basicType constDef (T_COMMA constDef)* T_SEMICOLON;
+
+// 常量定义
+constDef: T_ID T_ASSIGN expr;
 // 变量定义
 varDef: T_ID (T_ASSIGN expr)?;
 
@@ -129,7 +134,9 @@ T_BREAK: 'break';
 T_CONTINUE: 'continue';
 T_RETURN: 'return';
 T_INT: 'int';
+T_CONST: 'const';
 T_VOID: 'void';
+
 
 T_ID: [a-zA-Z_][a-zA-Z0-9_]*;
 fragment T_HEX_DIGIT: [0-9a-fA-F];

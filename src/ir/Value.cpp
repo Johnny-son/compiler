@@ -144,6 +144,16 @@ void Value::setLoadRegId(int32_t regId)
 	(void) regId;
 }
 
+void Value::setConst(bool isConst)
+{
+	this->isConstFlag = isConst;
+}
+
+bool Value::isConst() const
+{
+	return isConstFlag;
+}
+
 ///
 /// @brief 用新值替换所有使用该Value的指令中的操作数
 /// @param new_val

@@ -108,6 +108,9 @@ protected:
 	// 非终结符VarDecl的分析
 	std::any visitVarDecl(MiniCParser::VarDeclContext * ctx) override;
 
+	// 非终结符ConstDecl的分析
+	std::any visitConstDecl(MiniCParser::ConstDeclContext * ctx) override;
+
 	// 非终结符VarDecl的分析
 	std::any visitVarDef(MiniCParser::VarDefContext * ctx) override;
 

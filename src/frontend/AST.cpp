@@ -325,3 +325,31 @@ ast_node * ast_node::add_var_decl_node(ast_node * stmt_node, var_id_attr & id)
 
 	return stmt_node;
 }
+
+/// @brief 创建常量声明节点
+/// @param type 常量类型
+/// @param id 常量标识符属性
+/// @return ast_node* 常量声明节点
+ast_node * ast_node::create_const_decl_node(Type * type, var_id_attr & id)
+{
+	// 创建整型类型节点的终结符节点
+	ast_node * type_node = ast_node::New(type);
+
+	// 创建标识符终结符节点
+	ast_node * id_node = ast_node::New(id.id, id.lineno);
+
+	// 对于字符型字面量的字符串空间需要释放，因词法用到了strdup进行了字符串复制
+	free(id.id);
+	id.id = nullptr;
+
+	// 创建常量定义节点
+	ast_node * decl_node = ast_node::New(ast_operator_type::AST_OP_CONST_DECL, type_node, id_node);
+
+	// 暂存类型
+	decl_node->type = type;
+
+	// 标记为常量
+	decl_node->isConst = true;
+
+	return decl_node;
+}

@@ -14,19 +14,19 @@ ir:
 # 2023_func_03_arr_defn2.c
 # 2023_func_04_arr_defn3.c
 # 2023_func_05_arr_defn4.c
-# 2023_func_06_const_var_defn2.c
-# 2023_func_07_const_var_defn3.c
+2023_func_06_const_var_defn2.c
+2023_func_07_const_var_defn3.c
 # 2023_func_08_const_array_defn.c
 2023_func_09_func_defn.c
 2023_func_10_var_defn_func.c
 2023_func_11_add2.c
-# 2023_func_12_addc.c
-# 2023_func_13_sub2.c
+2023_func_12_addc.c
+2023_func_13_sub2.c
 2023_func_14_subc.c
 2023_func_15_mul.c
-# 2023_func_16_mulc.c
+2023_func_16_mulc.c
 2023_func_17_div.c
-# 2023_func_18_divc.c
+2023_func_18_divc.c
 2023_func_19_mod.c
 2023_func_20_rem.c
 2023_func_22_if_test3.c
@@ -56,19 +56,19 @@ asm:
 # 2023_func_03_arr_defn2.c
 # 2023_func_04_arr_defn3.c
 # 2023_func_05_arr_defn4.c
-# 2023_func_06_const_var_defn2.c
-# 2023_func_07_const_var_defn3.c
+2023_func_06_const_var_defn2.c
+2023_func_07_const_var_defn3.c
 # 2023_func_08_const_array_defn.c
 2023_func_09_func_defn.c
 2023_func_10_var_defn_func.c
 2023_func_11_add2.c
-# 2023_func_12_addc.c
-# 2023_func_13_sub2.c
+2023_func_12_addc.c
+2023_func_13_sub2.c
 2023_func_14_subc.c
 2023_func_15_mul.c
-# 2023_func_16_mulc.c
+2023_func_16_mulc.c
 2023_func_17_div.c
-# 2023_func_18_divc.c
+2023_func_18_divc.c
 2023_func_19_mod.c
 2023_func_20_rem.c
 test/stage1_params/param_basic.c
@@ -76,6 +76,7 @@ test/stage1_params/param_multi.c
 test/stage1_params/param_assign.c
 test/stage1_params/param_nested.c
 test/stage1_params/param_stack10.c
+# test/stage1_params/recursion_test.c
 
 err:
 test/stage1_params/param_redeclare_local.c
