@@ -365,6 +365,48 @@ parse_expected_errors_to_array() {
   echo "${result[@]+"${result[@]}"}"
 }
 
+parse_expected_front_errors() {
+  local case_file="$1"
+  local line_num=0
+  local line=""
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line_num=$((line_num + 1))
+    if [[ ${line_num} -gt 10 ]]; then
+      break
+    fi
+
+    if [[ "$line" =~ ^[[:space:]]*//[[:space:]]*@expected-front-error[[:space:]]+line[[:space:]]+([0-9]+):([0-9]+)[[:space:]]+(.+)[[:space:]]*$ ]]; then
+      local expected_line="${BASH_REMATCH[1]}"
+      local expected_col="${BASH_REMATCH[2]}"
+      local expected_msg="${BASH_REMATCH[3]}"
+      while [[ "$expected_msg" =~ ^[[:space:]]+(.*)$ ]]; do expected_msg="${BASH_REMATCH[1]}"; done
+      while [[ "$expected_msg" =~ ^(.*[^[:space:]])[[:space:]]+$ ]]; do expected_msg="${BASH_REMATCH[1]}"; done
+      printf '%s\t%s\t%s\n' "$expected_line" "$expected_col" "$expected_msg"
+    elif [[ "$line" =~ ^[[:space:]]*/\*[[:space:]]*@expected-front-error[[:space:]]+line[[:space:]]+([0-9]+):([0-9]+)[[:space:]]+(.+)[[:space:]]*\*/[[:space:]]*$ ]]; then
+      local expected_line2="${BASH_REMATCH[1]}"
+      local expected_col2="${BASH_REMATCH[2]}"
+      local expected_msg2="${BASH_REMATCH[3]}"
+      while [[ "$expected_msg2" =~ ^[[:space:]]+(.*)$ ]]; do expected_msg2="${BASH_REMATCH[1]}"; done
+      while [[ "$expected_msg2" =~ ^(.*[^[:space:]])[[:space:]]+$ ]]; do expected_msg2="${BASH_REMATCH[1]}"; done
+      printf '%s\t%s\t%s\n' "$expected_line2" "$expected_col2" "$expected_msg2"
+    fi
+  done < "${case_file}"
+}
+
+parse_expected_front_errors_to_array() {
+  local case_file="$1"
+  local -a result=()
+  local -r -a raw_errors=()
+
+  mapfile -t raw_errors < <(parse_expected_front_errors "${case_file}")
+  for item in "${raw_errors[@]}"; do
+    [[ -n "${item}" ]] && result+=("${item}")
+  done
+
+  echo "${result[@]+"${result[@]}"}"
+}
+
 setup_asm_tools() {
   local default_asm_cc=""
   local default_asm_runner=""
@@ -489,6 +531,18 @@ run_err_suite() {
   local actual_key=""
   local -a actual_errors=()
   local -a expected_found=()
+  local -a front_errors=()
+  local -a raw_front_errors=()
+  local front_case=0
+  local front_summary_error=0
+  local front_summary_front=0
+  local front_expected_line=""
+  local front_expected_col=""
+  local front_expected_msg=""
+  local front_actual_line=""
+  local front_actual_col=""
+  local front_actual_msg=""
+  local -a actual_front_errors=()
   local i=0
 
   CASES=()
@@ -525,7 +579,18 @@ run_err_suite() {
       [[ -n "${item}" ]] && errors+=("${item}")
     done
 
-    if [[ ${#errors[@]} -eq 0 ]]; then
+    mapfile -t raw_front_errors < <(parse_expected_front_errors "${case_file}")
+    front_errors=()
+    for item in "${raw_front_errors[@]}"; do
+      [[ -n "${item}" ]] && front_errors+=("${item}")
+    done
+
+    front_case=0
+    if [[ ${#front_errors[@]} -gt 0 ]]; then
+      front_case=1
+    fi
+
+    if [[ ${front_case} -eq 0 && ${#errors[@]} -eq 0 ]]; then
       print_case_failure "${case_name}" "missing @expected-error tag"
       record_failure "${case_name}" "missing @expected-error tag"
       SUITE_NG_COUNT=$((SUITE_NG_COUNT + 1))
@@ -548,6 +613,75 @@ run_err_suite() {
       print_case_failure "${case_name}" "expected compile to fail"
       record_failure "${case_name}" "expected compile to fail"
       SUITE_NG_COUNT=$((SUITE_NG_COUNT + 1))
+      continue
+    fi
+
+    if [[ ${front_case} -eq 1 ]]; then
+      front_summary_error=0
+      front_summary_front=0
+      actual_front_errors=()
+
+      while IFS= read -r line || [[ -n "${line}" ]]; do
+        if [[ "${line}" =~ ^line[[:space:]]+([0-9]+):([0-9]+)[[:space:]]+(.+) ]]; then
+          front_actual_line="${BASH_REMATCH[1]}"
+          front_actual_col="${BASH_REMATCH[2]}"
+          front_actual_msg="${BASH_REMATCH[3]}"
+          actual_front_errors+=("${front_actual_line}"$'\t'"${front_actual_col}"$'\t'"${front_actual_msg}")
+        elif [[ "${line}" == "Antlr4的词语与语法分析错误" ]]; then
+          front_summary_error=1
+        elif [[ "${line}" == "前端分析错误" ]]; then
+          front_summary_front=1
+        fi
+      done < "${stderr_file}"
+
+      if [[ ${front_summary_error} -ne 1 || ${front_summary_front} -ne 1 ]]; then
+        print_case_failure "${case_name}" "front-end summary mismatch"
+        record_failure "${case_name}" "front-end summary mismatch"
+        SUITE_NG_COUNT=$((SUITE_NG_COUNT + 1))
+        continue
+      fi
+
+      matched=0
+      mismatched=0
+      missing_count=0
+      extra_count=0
+      expected_found=()
+      for ((i = 0; i < ${#front_errors[@]}; i++)); do
+        expected_found[i]=0
+      done
+
+      for expected_err in "${front_errors[@]}"; do
+        IFS=$'\t' read -r front_expected_line front_expected_col front_expected_msg <<< "${expected_err}"
+
+        local front_match_found=0
+        for actual_err in "${actual_front_errors[@]}"; do
+          IFS=$'\t' read -r front_actual_line front_actual_col front_actual_msg <<< "${actual_err}"
+
+          if [[ "${front_actual_line}" == "${front_expected_line}" && "${front_actual_col}" == "${front_expected_col}" && "${front_actual_msg}" == *"${front_expected_msg}"* ]]; then
+            front_match_found=1
+            matched=$((matched + 1))
+            break
+          fi
+        done
+
+        if [[ ${front_match_found} -eq 0 ]]; then
+          mismatched=$((mismatched + 1))
+          missing_count=$((missing_count + 1))
+        fi
+      done
+
+      if [[ ${#actual_front_errors[@]} -gt ${#front_errors[@]} ]]; then
+        extra_count=$((${#actual_front_errors[@]} - ${#front_errors[@]}))
+      fi
+
+      if [[ ${mismatched} -eq 0 && ${extra_count} -eq 0 ]]; then
+        SUITE_OK_COUNT=$((SUITE_OK_COUNT + 1))
+      else
+        print_case_failure "${case_name}" "front-end error mismatch"
+        record_failure "${case_name}" "front-end error mismatch"
+        SUITE_NG_COUNT=$((SUITE_NG_COUNT + 1))
+      fi
+
       continue
     fi
 

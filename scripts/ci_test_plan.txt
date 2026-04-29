@@ -87,4 +87,5 @@ test/stage1_params/param_arg_too_many.c
 test/stage1_params/param_arg_too_few.c
 test/stage1_params/param_global_init_nonconst.c
 test/stage1_params/param_duplicate.c
-
+test/stage1_params/change_const_var.c
+test/stage1_params/const_not_init.c
