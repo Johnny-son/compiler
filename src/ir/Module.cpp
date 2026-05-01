@@ -5,9 +5,12 @@
 #include <cstdarg>
 #include <cstdio>
 #include <fstream>
+#include <iomanip>
+#include <sstream>
 #include <string>
 #include <vector>
 
+#include "ir/Types/FloatType.h"
 #include "ir/Types/IntegerType.h"
 #include "ir/Types/PointerType.h"
 #include "ir/Types/VoidType.h"
@@ -78,11 +81,20 @@ Module::Module(std::string _name) : name(_name)
 	(void) newFunction("putch", VoidType::getType(), {new FormalParam{IntegerType::getTypeInt(), ""}}, true);
 	(void) newFunction("getch", IntegerType::getTypeInt(), {}, true);
 	auto * intPtrType = const_cast<PointerType *>(PointerType::get(IntegerType::getTypeInt()));
+	auto * floatPtrType = const_cast<PointerType *>(PointerType::get(FloatType::getTypeFloat()));
 	(void) newFunction("getarray", IntegerType::getTypeInt(), {new FormalParam{intPtrType, ""}}, true);
 	(void) newFunction(
 		"putarray",
 		VoidType::getType(),
 		{new FormalParam{IntegerType::getTypeInt(), ""}, new FormalParam{intPtrType, ""}},
+		true);
+	(void) newFunction("getfloat", FloatType::getTypeFloat(), {}, true);
+	(void) newFunction("getfarray", IntegerType::getTypeInt(), {new FormalParam{floatPtrType, ""}}, true);
+	(void) newFunction("putfloat", VoidType::getType(), {new FormalParam{FloatType::getTypeFloat(), ""}}, true);
+	(void) newFunction(
+		"putfarray",
+		VoidType::getType(),
+		{new FormalParam{IntegerType::getTypeInt(), ""}, new FormalParam{floatPtrType, ""}},
 		true);
 }
 
@@ -236,6 +248,31 @@ ConstInt * Module::findConstInt(int32_t val)
 	}
 
 	return temp;
+}
+
+void Module::insertConstFloatDirectly(ConstFloat * val)
+{
+	constFloatMap.emplace(val->getVal(), val);
+}
+
+ConstFloat * Module::newConstFloat(float floatVal)
+{
+	ConstFloat * val = findConstFloat(floatVal);
+	if (!val) {
+		val = new ConstFloat(floatVal);
+		insertConstFloatDirectly(val);
+	}
+
+	return val;
+}
+
+ConstFloat * Module::findConstFloat(float val)
+{
+	auto pIter = constFloatMap.find(val);
+	if (pIter != constFloatMap.end()) {
+		return pIter->second;
+	}
+	return nullptr;
 }
 
 /// @brief 在当前的作用域中查找，若没有查找到则创建局部变量或者全局变量。请注意不能创建临时变量
@@ -406,8 +443,10 @@ std::string Module::toString() const
 
 	for (auto * var: globalVariableVector) {
 		std::string initializer;
-		if (var->getType()->isArrayType()) {
-			initializer = var->hasInitializerText() ? var->getInitializerText() : "zeroinitializer";
+		if (var->hasInitializerText()) {
+			initializer = var->getInitializerText();
+		} else if (var->getType()->isArrayType() || var->getType()->isFloatType()) {
+			initializer = "zeroinitializer";
 		} else {
 			initializer = std::to_string(var->hasInitializerValue() ? var->getInitializerInt() : 0);
 		}

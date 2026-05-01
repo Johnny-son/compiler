@@ -82,6 +82,26 @@ BinaryInst * IRBuilder::createSRem(Value * lhs, Value * rhs, const std::string &
 	return insert(new BinaryInst(currentFunction(), BinaryInst::Op::SRem, lhs, rhs), name);
 }
 
+BinaryInst * IRBuilder::createFAdd(Value * lhs, Value * rhs, const std::string & name)
+{
+	return insert(new BinaryInst(currentFunction(), BinaryInst::Op::FAdd, lhs, rhs), name);
+}
+
+BinaryInst * IRBuilder::createFSub(Value * lhs, Value * rhs, const std::string & name)
+{
+	return insert(new BinaryInst(currentFunction(), BinaryInst::Op::FSub, lhs, rhs), name);
+}
+
+BinaryInst * IRBuilder::createFMul(Value * lhs, Value * rhs, const std::string & name)
+{
+	return insert(new BinaryInst(currentFunction(), BinaryInst::Op::FMul, lhs, rhs), name);
+}
+
+BinaryInst * IRBuilder::createFDiv(Value * lhs, Value * rhs, const std::string & name)
+{
+	return insert(new BinaryInst(currentFunction(), BinaryInst::Op::FDiv, lhs, rhs), name);
+}
+
 ICmpInst * IRBuilder::createICmpEQ(Value * lhs, Value * rhs, const std::string & name)
 {
 	return insert(new ICmpInst(currentFunction(), ICmpInst::Predicate::EQ, lhs, rhs), name);
@@ -112,9 +132,49 @@ ICmpInst * IRBuilder::createICmpSGE(Value * lhs, Value * rhs, const std::string 
 	return insert(new ICmpInst(currentFunction(), ICmpInst::Predicate::SGE, lhs, rhs), name);
 }
 
+FCmpInst * IRBuilder::createFCmpOEQ(Value * lhs, Value * rhs, const std::string & name)
+{
+	return insert(new FCmpInst(currentFunction(), FCmpInst::Predicate::OEQ, lhs, rhs), name);
+}
+
+FCmpInst * IRBuilder::createFCmpONE(Value * lhs, Value * rhs, const std::string & name)
+{
+	return insert(new FCmpInst(currentFunction(), FCmpInst::Predicate::ONE, lhs, rhs), name);
+}
+
+FCmpInst * IRBuilder::createFCmpOLT(Value * lhs, Value * rhs, const std::string & name)
+{
+	return insert(new FCmpInst(currentFunction(), FCmpInst::Predicate::OLT, lhs, rhs), name);
+}
+
+FCmpInst * IRBuilder::createFCmpOLE(Value * lhs, Value * rhs, const std::string & name)
+{
+	return insert(new FCmpInst(currentFunction(), FCmpInst::Predicate::OLE, lhs, rhs), name);
+}
+
+FCmpInst * IRBuilder::createFCmpOGT(Value * lhs, Value * rhs, const std::string & name)
+{
+	return insert(new FCmpInst(currentFunction(), FCmpInst::Predicate::OGT, lhs, rhs), name);
+}
+
+FCmpInst * IRBuilder::createFCmpOGE(Value * lhs, Value * rhs, const std::string & name)
+{
+	return insert(new FCmpInst(currentFunction(), FCmpInst::Predicate::OGE, lhs, rhs), name);
+}
+
 ZExtInst * IRBuilder::createZExt(Value * value, Type * targetType, const std::string & name)
 {
 	return insert(new ZExtInst(currentFunction(), value, targetType), name);
+}
+
+CastInst * IRBuilder::createSIToFP(Value * value, Type * targetType, const std::string & name)
+{
+	return insert(new CastInst(currentFunction(), CastInst::Op::SIToFP, value, targetType), name);
+}
+
+CastInst * IRBuilder::createFPToSI(Value * value, Type * targetType, const std::string & name)
+{
+	return insert(new CastInst(currentFunction(), CastInst::Op::FPToSI, value, targetType), name);
 }
 
 GetElementPtrInst * IRBuilder::createGEP(Value * basePtr, const std::vector<Value *> & indices, const std::string & name)

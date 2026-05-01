@@ -1,11 +1,13 @@
 // Antlr4的具体语法树的遍历产生AST
 
+#include <cstdlib>
 #include <string>
 #include <vector>
 
 #include "CSTVisitor.h"
 #include "AST.h"
 #include "AttrType.h"
+#include "ir/Types/FloatType.h"
 #include "ir/Types/IntegerType.h"
 
 #define Instanceof(res, type, var) auto res = dynamic_cast<type>(var)
@@ -75,10 +77,10 @@ std::any MiniCCSTVisitor::visitCompUnit(MiniCParser::CompUnitContext * ctx)
 // 非终结运算符funcDef的遍历
 std::any MiniCCSTVisitor::visitFuncDef(MiniCParser::FuncDefContext * ctx)
 {
-	// 识别的文法产生式：funcDef : T_INT T_ID T_L_PAREN funcFParams? T_R_PAREN block;
+	// 识别的文法产生式：funcDef : funcType T_ID T_L_PAREN funcFParams? T_R_PAREN block;
 
 	// 函数返回类型，终结符
-	type_attr funcReturnType{BasicType::TYPE_INT, (int64_t) ctx->T_INT()->getSymbol()->getLine()};
+	type_attr funcReturnType = std::any_cast<type_attr>(visitFuncType(ctx->funcType()));
 
 	// 创建函数名的标识符终结符节点，终结符
 	char * id = strdup(ctx->T_ID()->getText().c_str());
@@ -98,6 +100,22 @@ std::any MiniCCSTVisitor::visitFuncDef(MiniCParser::FuncDefContext * ctx)
 	return ast_node::create_func_def(funcReturnType, funcId, blockNode, formalParamsNode);
 }
 
+std::any MiniCCSTVisitor::visitFuncType(MiniCParser::FuncTypeContext * ctx)
+{
+	type_attr attr{BasicType::TYPE_VOID, -1};
+	if (ctx->T_INT()) {
+		attr.type = BasicType::TYPE_INT;
+		attr.lineno = (int64_t) ctx->T_INT()->getSymbol()->getLine();
+	} else if (ctx->T_FLOAT()) {
+		attr.type = BasicType::TYPE_FLOAT;
+		attr.lineno = (int64_t) ctx->T_FLOAT()->getSymbol()->getLine();
+	} else if (ctx->T_VOID()) {
+		attr.type = BasicType::TYPE_VOID;
+		attr.lineno = (int64_t) ctx->T_VOID()->getSymbol()->getLine();
+	}
+	return attr;
+}
+
 std::any MiniCCSTVisitor::visitFuncFParams(MiniCParser::FuncFParamsContext * ctx)
 {
 	// 识别的文法产生式：funcFParams: funcFParam (T_COMMA funcFParam)*;
@@ -114,9 +132,11 @@ std::any MiniCCSTVisitor::visitFuncFParams(MiniCParser::FuncFParamsContext * ctx
 
 std::any MiniCCSTVisitor::visitFuncFParam(MiniCParser::FuncFParamContext * ctx)
 {
-	// 识别的文法产生式：funcFParam: T_INT T_ID funcArrayDims?;
+	// 识别的文法产生式：funcFParam: basicType T_ID funcArrayDims?;
 	int64_t lineNo = (int64_t) ctx->T_ID()->getSymbol()->getLine();
+	type_attr typeAttr = std::any_cast<type_attr>(visitBasicType(ctx->basicType()));
 	auto * paramNode = ast_node::create_func_formal_param((uint32_t) lineNo, ctx->T_ID()->getText().c_str());
+	paramNode->type = ast_node::typeAttr2Type(typeAttr);
 	if (ctx->funcArrayDims()) {
 		auto * dimsNode = std::any_cast<ast_node *>(visitFuncArrayDims(ctx->funcArrayDims()));
 		(void) paramNode->insert_son_node(dimsNode);
@@ -588,7 +608,7 @@ std::any MiniCCSTVisitor::visitUnaryOp(MiniCParser::UnaryOpContext * ctx)
 
 std::any MiniCCSTVisitor::visitPrimaryExp(MiniCParser::PrimaryExpContext * ctx)
 {
-	// 识别文法产生式 primaryExp: T_L_PAREN expr T_R_PAREN | T_DIGIT | lVal;
+	// 识别文法产生式 primaryExp: T_L_PAREN expr T_R_PAREN | T_DIGIT | T_FLOAT_LITERAL | lVal;
 
 	ast_node * node = nullptr;
 
@@ -599,6 +619,10 @@ std::any MiniCCSTVisitor::visitPrimaryExp(MiniCParser::PrimaryExpContext * ctx)
 		uint32_t val = (uint32_t) stoull(ctx->T_DIGIT()->getText(), nullptr, 0);
 		int64_t lineNo = (int64_t) ctx->T_DIGIT()->getSymbol()->getLine();
 		node = ast_node::New(digit_int_attr{val, lineNo});
+	} else if (ctx->T_FLOAT_LITERAL()) {
+		double val = std::strtod(ctx->T_FLOAT_LITERAL()->getText().c_str(), nullptr);
+		int64_t lineNo = (int64_t) ctx->T_FLOAT_LITERAL()->getSymbol()->getLine();
+		node = ast_node::New(digit_real_attr{val, lineNo});
 	} else if (ctx->lVal()) {
 		// 具有左值的表达式
 		// 识别 primaryExp: lVal
@@ -765,11 +789,14 @@ std::any MiniCCSTVisitor::visitConstDecl(MiniCParser::ConstDeclContext * ctx)
 
 std::any MiniCCSTVisitor::visitBasicType(MiniCParser::BasicTypeContext * ctx)
 {
-	// basicType: T_INT;
+	// basicType: T_INT | T_FLOAT;
 	type_attr attr{BasicType::TYPE_VOID, -1};
 	if (ctx->T_INT()) {
 		attr.type = BasicType::TYPE_INT;
 		attr.lineno = (int64_t) ctx->T_INT()->getSymbol()->getLine();
+	} else if (ctx->T_FLOAT()) {
+		attr.type = BasicType::TYPE_FLOAT;
+		attr.lineno = (int64_t) ctx->T_FLOAT()->getSymbol()->getLine();
 	}
 
 	return attr;

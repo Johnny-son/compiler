@@ -1,5 +1,6 @@
 #include <cstdarg>
 #include <cstdio>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -8,8 +9,10 @@
 #include "ir/include/Type.h"
 #include "ir/include/Value.h"
 #include "ir/Types/ArrayType.h"
+#include "ir/Types/FloatType.h"
 #include "ir/Types/IntegerType.h"
 #include "ir/Types/PointerType.h"
+#include "ir/Values/ConstFloat.h"
 #include "ir/Values/ConstInt.h"
 #include "ir/Values/FormalParam.h"
 #include "ir/Values/GlobalVariable.h"
@@ -69,6 +72,7 @@ IRGenerator::IRGenerator(ast_node * _root, Module * _module) : root(_root), modu
 {
 	/* 叶子节点 */
 	ast2ir_handlers[ast_operator_type::AST_OP_LEAF_LITERAL_UINT] = &IRGenerator::ir_leaf_node_uint;
+	ast2ir_handlers[ast_operator_type::AST_OP_LEAF_LITERAL_FLOAT] = &IRGenerator::ir_leaf_node_float;
 	ast2ir_handlers[ast_operator_type::AST_OP_LEAF_VAR_ID] = &IRGenerator::ir_leaf_node_var_id;
 	ast2ir_handlers[ast_operator_type::AST_OP_LEAF_TYPE] = &IRGenerator::ir_leaf_node_type;
 	ast2ir_handlers[ast_operator_type::AST_OP_ARRAY_ACCESS] = &IRGenerator::ir_array_access;
@@ -167,20 +171,21 @@ bool IRGenerator::ir_compile_unit(ast_node * node)
 {
 	module->setCurrentFunction(nullptr);
 
-	// 第一阶段：先把所有函数签名注册进模块，支持先调用后定义和递归
+	// 第一阶段：翻译全局变量和常量声明，初始化仍处于全局上下文。
+	// 函数形参数组维度可能引用前面的全局const，因此要先让这些const进入符号表。
 	for (auto son: node->sons) {
-		if (son != nullptr && son->node_type == ast_operator_type::AST_OP_FUNC_DEF) {
-			if (!predeclare_function(son)) {
+		if (son != nullptr && son->node_type == ast_operator_type::AST_OP_DECL_STMT) {
+			ast_node * son_node = ir_visit_ast_node(son);
+			if (!son_node) {
 				return false;
 			}
 		}
 	}
 
-	// 第二阶段：翻译全局变量声明，初始化仍处于全局上下文
+	// 第二阶段：把所有函数签名注册进模块，支持先调用后定义和递归
 	for (auto son: node->sons) {
-		if (son != nullptr && son->node_type == ast_operator_type::AST_OP_DECL_STMT) {
-			ast_node * son_node = ir_visit_ast_node(son);
-			if (!son_node) {
+		if (son != nullptr && son->node_type == ast_operator_type::AST_OP_FUNC_DEF) {
+			if (!predeclare_function(son)) {
 				return false;
 			}
 		}
@@ -371,7 +376,7 @@ bool IRGenerator::ir_function_body(ast_node * node)
 			if (type_node->type->isVoidType()) {
 				builder.createRetVoid();
 			} else {
-				builder.createRet(module->newConstInt(0));
+				builder.createRet(zeroValueForType(type_node->type));
 			}
 		}
 		ok = true;
@@ -447,7 +452,11 @@ bool IRGenerator::ir_return(ast_node * node)
 	}
 
 	if (right) {
-		node->val = emitRValue(right->val, "retval");
+		node->val = convertValueToType(emitRValue(right->val, "retval"), currentFunc->getReturnType(), "retcast");
+		if (node->val == nullptr) {
+			report_ir_error("E1123", node != nullptr ? node->line_no : -1, "返回语句", "返回值类型转换失败");
+			return false;
+		}
 		builder.createRet(node->val);
 	} else {
 		node->val = nullptr;
@@ -475,6 +484,13 @@ bool IRGenerator::ir_leaf_node_uint(ast_node * node)
 
 	node->val = val;
 
+	return true;
+}
+
+// float字面量叶子节点翻译成MiniLLVM IR
+bool IRGenerator::ir_leaf_node_float(ast_node * node)
+{
+	node->val = module->newConstFloat(node->float_val);
 	return true;
 }
 
@@ -552,7 +568,7 @@ Value * IRGenerator::emitRValue(Value * value, const std::string & name)
 		return nullptr;
 	}
 
-	if (dynamic_cast<ConstInt *>(value) != nullptr) {
+	if (dynamic_cast<ConstInt *>(value) != nullptr || dynamic_cast<ConstFloat *>(value) != nullptr) {
 		return value;
 	}
 
@@ -574,6 +590,45 @@ Value * IRGenerator::emitRValue(Value * value, const std::string & name)
 	return value;
 }
 
+Value * IRGenerator::convertValueToType(Value * value, Type * targetType, const std::string & name)
+{
+	if (value == nullptr || targetType == nullptr) {
+		return nullptr;
+	}
+
+	Type * sourceType = value->getType();
+	if (sourceType == targetType || sourceType->toString() == targetType->toString()) {
+		return value;
+	}
+
+	if (sourceType->isInt1Byte() && targetType->isInt32Type()) {
+		return builder.createZExt(value, targetType, name.empty() ? "booltoint" : name);
+	}
+
+	if (sourceType->isInt1Byte() && targetType->isFloatType()) {
+		Value * intValue = builder.createZExt(value, IntegerType::getTypeInt(), "booltoint");
+		return builder.createSIToFP(intValue, targetType, name.empty() ? "sitofp" : name);
+	}
+
+	if (sourceType->isIntegerType() && targetType->isFloatType()) {
+		return builder.createSIToFP(value, targetType, name.empty() ? "sitofp" : name);
+	}
+
+	if (sourceType->isFloatType() && targetType->isInt32Type()) {
+		return builder.createFPToSI(value, targetType, name.empty() ? "fptosi" : name);
+	}
+
+	return nullptr;
+}
+
+Value * IRGenerator::zeroValueForType(Type * type)
+{
+	if (type != nullptr && type->isFloatType()) {
+		return module->newConstFloat(0.0f);
+	}
+	return module->newConstInt(0);
+}
+
 Value * IRGenerator::emitCondValue(Value * value)
 {
 	Value * cond = emitRValue(value, "cond");
@@ -583,6 +638,10 @@ Value * IRGenerator::emitCondValue(Value * value)
 
 	if (cond->getType()->isInt1Byte()) {
 		return cond;
+	}
+
+	if (cond->getType()->isFloatType()) {
+		return builder.createFCmpONE(cond, module->newConstFloat(0.0f), "tobool");
 	}
 
 	return builder.createICmpNE(cond, module->newConstInt(0), "tobool");
@@ -821,18 +880,48 @@ bool IRGenerator::emitArrayInitializerStores(Value * arrayAddr, Type * arrayType
 			return false;
 		}
 
-		Value * initValue = module->newConstInt(0);
+		Type * elementType = nullptr;
+		if (auto * ptrType = dynamic_cast<PointerType *>(elemAddr->getType()); ptrType != nullptr) {
+			elementType = const_cast<Type *>(ptrType->getPointeeType());
+		}
+
+		Value * initValue = zeroValueForType(elementType);
 		if (slots[flatIndex] != nullptr) {
 			ast_node * initAst = ir_visit_ast_node(slots[flatIndex]);
 			if (initAst == nullptr) {
 				return false;
 			}
 			initValue = emitRValue(initAst->val, "arrayinit");
+			if (elementType != nullptr) {
+				initValue = convertValueToType(initValue, elementType, "arrayinit.cast");
+				if (initValue == nullptr) {
+					return false;
+				}
+			}
 		}
 
 		builder.createStore(initValue, elemAddr);
 	}
 
+	return true;
+}
+
+bool IRGenerator::buildScalarInitializerText(Type * type, ast_node * initNode, std::string & initializerText)
+{
+	if (type != nullptr && type->isFloatType()) {
+		float value = 0.0f;
+		if (initNode != nullptr && !eval_global_const_float(initNode, value)) {
+			return false;
+		}
+		initializerText = module->newConstFloat(value)->getIRName();
+		return true;
+	}
+
+	int32_t value = 0;
+	if (initNode != nullptr && !eval_global_const_expr(initNode, value)) {
+		return false;
+	}
+	initializerText = std::to_string(value);
 	return true;
 }
 
@@ -849,17 +938,26 @@ bool IRGenerator::buildGlobalArrayInitializer(Type * arrayType, ast_node * initN
 		return false;
 	}
 
-	std::vector<int32_t> values(total, 0);
+	std::vector<std::string> values(total);
 	for (size_t index = 0; index < total; ++index) {
+		Type * currentType = arrayType;
+		for (int32_t dimIndex: flattenIndexToIndices(index, getArrayDimensions(arrayType))) {
+			(void) dimIndex;
+			auto * currentArray = dynamic_cast<ArrayType *>(currentType);
+			if (currentArray != nullptr) {
+				currentType = currentArray->getElementType();
+			}
+		}
+		(void) buildScalarInitializerText(currentType, nullptr, values[index]);
 		if (slots[index] == nullptr) {
 			continue;
 		}
-		if (!eval_global_const_expr(slots[index], values[index])) {
+		if (!buildScalarInitializerText(currentType, slots[index], values[index])) {
 			report_ir_error(
 				"E1301",
 				slots[index] != nullptr ? slots[index]->line_no : -1,
 				"全局初始化",
-				"全局数组初始化目前只支持常量整数表达式");
+				"全局数组初始化目前只支持常量表达式");
 			return false;
 		}
 	}
@@ -879,8 +977,8 @@ bool IRGenerator::buildGlobalArrayInitializer(Type * arrayType, ast_node * initN
 			return text;
 		}
 
-		int32_t value = cursor < values.size() ? values[cursor++] : 0;
-		return includeType ? currentType->toString() + " " + std::to_string(value) : std::to_string(value);
+		std::string value = cursor < values.size() ? values[cursor++] : "0";
+		return includeType ? currentType->toString() + " " + value : value;
 	};
 
 	initializerText = emitAggregate(emitAggregate, arrayType, false);
@@ -905,40 +1003,78 @@ bool IRGenerator::ir_binary(ast_node * node, BinaryEmitOp op)
 
 	Value * lhs = emitRValue(left->val, "lhs");
 	Value * rhs = emitRValue(right->val, "rhs");
+	const bool useFloat = (lhs != nullptr && lhs->getType()->isFloatType()) || (rhs != nullptr && rhs->getType()->isFloatType());
+
+	if (useFloat) {
+		lhs = convertValueToType(lhs, FloatType::getTypeFloat(), "lhs.fp");
+		rhs = convertValueToType(rhs, FloatType::getTypeFloat(), "rhs.fp");
+		if (lhs == nullptr || rhs == nullptr) {
+			report_ir_error("E1217", node != nullptr ? node->line_no : -1, "类型转换", "浮点二元表达式类型转换失败");
+			return false;
+		}
+	}
 
 	switch (op) {
 		case BinaryEmitOp::Add:
-			node->val = builder.createAdd(lhs, rhs, "addtmp");
+			node->val = useFloat ? builder.createFAdd(lhs, rhs, "addtmp") : builder.createAdd(lhs, rhs, "addtmp");
 			break;
 		case BinaryEmitOp::Sub:
-			node->val = builder.createSub(lhs, rhs, "subtmp");
+			node->val = useFloat ? builder.createFSub(lhs, rhs, "subtmp") : builder.createSub(lhs, rhs, "subtmp");
 			break;
 		case BinaryEmitOp::Mul:
-			node->val = builder.createMul(lhs, rhs, "multmp");
+			node->val = useFloat ? builder.createFMul(lhs, rhs, "multmp") : builder.createMul(lhs, rhs, "multmp");
 			break;
 		case BinaryEmitOp::Div:
-			node->val = builder.createSDiv(lhs, rhs, "divtmp");
+			node->val = useFloat ? builder.createFDiv(lhs, rhs, "divtmp") : builder.createSDiv(lhs, rhs, "divtmp");
 			break;
 		case BinaryEmitOp::Mod:
+			if (useFloat) {
+				report_ir_error("E1218", node != nullptr ? node->line_no : -1, "类型检查", "float类型不支持取模运算");
+				return false;
+			}
 			node->val = builder.createSRem(lhs, rhs, "modtmp");
 			break;
 		case BinaryEmitOp::Eq:
-			node->val = builder.createZExt(builder.createICmpEQ(lhs, rhs, "cmptmp"), IntegerType::getTypeInt(), "booltoint");
+			node->val = builder.createZExt(
+				useFloat ? static_cast<Value *>(builder.createFCmpOEQ(lhs, rhs, "cmptmp")) :
+						   static_cast<Value *>(builder.createICmpEQ(lhs, rhs, "cmptmp")),
+				IntegerType::getTypeInt(),
+				"booltoint");
 			break;
 		case BinaryEmitOp::Ne:
-			node->val = builder.createZExt(builder.createICmpNE(lhs, rhs, "cmptmp"), IntegerType::getTypeInt(), "booltoint");
+			node->val = builder.createZExt(
+				useFloat ? static_cast<Value *>(builder.createFCmpONE(lhs, rhs, "cmptmp")) :
+						   static_cast<Value *>(builder.createICmpNE(lhs, rhs, "cmptmp")),
+				IntegerType::getTypeInt(),
+				"booltoint");
 			break;
 		case BinaryEmitOp::Lt:
-			node->val = builder.createZExt(builder.createICmpSLT(lhs, rhs, "cmptmp"), IntegerType::getTypeInt(), "booltoint");
+			node->val = builder.createZExt(
+				useFloat ? static_cast<Value *>(builder.createFCmpOLT(lhs, rhs, "cmptmp")) :
+						   static_cast<Value *>(builder.createICmpSLT(lhs, rhs, "cmptmp")),
+				IntegerType::getTypeInt(),
+				"booltoint");
 			break;
 		case BinaryEmitOp::Le:
-			node->val = builder.createZExt(builder.createICmpSLE(lhs, rhs, "cmptmp"), IntegerType::getTypeInt(), "booltoint");
+			node->val = builder.createZExt(
+				useFloat ? static_cast<Value *>(builder.createFCmpOLE(lhs, rhs, "cmptmp")) :
+						   static_cast<Value *>(builder.createICmpSLE(lhs, rhs, "cmptmp")),
+				IntegerType::getTypeInt(),
+				"booltoint");
 			break;
 		case BinaryEmitOp::Gt:
-			node->val = builder.createZExt(builder.createICmpSGT(lhs, rhs, "cmptmp"), IntegerType::getTypeInt(), "booltoint");
+			node->val = builder.createZExt(
+				useFloat ? static_cast<Value *>(builder.createFCmpOGT(lhs, rhs, "cmptmp")) :
+						   static_cast<Value *>(builder.createICmpSGT(lhs, rhs, "cmptmp")),
+				IntegerType::getTypeInt(),
+				"booltoint");
 			break;
 		case BinaryEmitOp::Ge:
-			node->val = builder.createZExt(builder.createICmpSGE(lhs, rhs, "cmptmp"), IntegerType::getTypeInt(), "booltoint");
+			node->val = builder.createZExt(
+				useFloat ? static_cast<Value *>(builder.createFCmpOGE(lhs, rhs, "cmptmp")) :
+						   static_cast<Value *>(builder.createICmpSGE(lhs, rhs, "cmptmp")),
+				IntegerType::getTypeInt(),
+				"booltoint");
 			break;
 		default:
 			return false;
@@ -1024,7 +1160,9 @@ bool IRGenerator::ir_logical_not(ast_node * node)
 
 	// 逻辑非统一翻译成“expr == 0”，结果仍为i32 0/1
 	Value * value = emitRValue(expr->val, "nottmp");
-	node->val = builder.createZExt(builder.createICmpEQ(value, module->newConstInt(0), "nottmp"), IntegerType::getTypeInt(), "booltoint");
+	Value * cmp = value->getType()->isFloatType() ? static_cast<Value *>(builder.createFCmpOEQ(value, module->newConstFloat(0.0f), "nottmp")) :
+													static_cast<Value *>(builder.createICmpEQ(value, module->newConstInt(0), "nottmp"));
+	node->val = builder.createZExt(cmp, IntegerType::getTypeInt(), "booltoint");
 
 	return true;
 }
@@ -1253,7 +1391,21 @@ bool IRGenerator::ir_assign(ast_node * node)
 		return false;
 	}
 
+	Type * targetType = nullptr;
+	if (auto * ptrType = dynamic_cast<PointerType *>(left->val->getType()); ptrType != nullptr) {
+		targetType = const_cast<Type *>(ptrType->getPointeeType());
+	} else if (dynamic_cast<GlobalVariable *>(left->val) != nullptr) {
+		targetType = left->val->getType();
+	}
+
 	Value * value = emitRValue(right->val, "assigntmp");
+	if (targetType != nullptr) {
+		value = convertValueToType(value, targetType, "assigncast");
+		if (value == nullptr) {
+			report_ir_error("E1308", node != nullptr ? node->line_no : -1, "赋值语句", "赋值类型转换失败");
+			return false;
+		}
+	}
 	builder.createStore(value, left->val);
 	node->val = value;
 
@@ -1339,6 +1491,27 @@ bool IRGenerator::ir_variable_declare(ast_node * node)
 			return true;
 		}
 
+		if (declaredType->isFloatType()) {
+			std::string initializerText;
+			if (!buildScalarInitializerText(declaredType, initExpr, initializerText)) {
+				report_ir_error(
+					"E1301",
+					node->sons[1] != nullptr ? node->sons[1]->line_no : -1,
+					"全局初始化",
+					"全局变量(%s)初始化目前只支持常量表达式",
+					node->sons[1]->name.c_str());
+				return false;
+			}
+			global_var->setInitializerText(initializerText);
+			if (node->isConst) {
+				float constValue = 0.0f;
+				if (eval_global_const_float(initExpr, constValue)) {
+					node->val->setConstFloatValue(constValue);
+				}
+			}
+			return true;
+		}
+
 		int32_t init_value = 0;
 		if (!eval_global_const_expr(initExpr, init_value)) {
 			report_ir_error(
@@ -1378,11 +1551,20 @@ bool IRGenerator::ir_variable_declare(ast_node * node)
 	}
 
 	Value * initValue = emitRValue(init_node->val, "inittmp");
+	initValue = convertValueToType(initValue, declaredType, "initcast");
+	if (initValue == nullptr) {
+		report_ir_error("E1309", node != nullptr ? node->line_no : -1, "变量声明", "初始化类型转换失败");
+		return false;
+	}
 	builder.createStore(initValue, node->val);
 	if (node->isConst) {
 		int32_t constValue = 0;
 		if (eval_global_const_expr(initExpr, constValue)) {
 			node->val->setConstIntValue(constValue);
+		}
+		float constFloat = 0.0f;
+		if (eval_global_const_float(initExpr, constFloat)) {
+			node->val->setConstFloatValue(constFloat);
 		}
 	}
 
@@ -1410,13 +1592,24 @@ bool IRGenerator::eval_global_const_expr(ast_node * node, int32_t & value)
 			value = static_cast<int32_t>(node->integer_val);
 			return true;
 
+		case ast_operator_type::AST_OP_LEAF_LITERAL_FLOAT:
+			value = static_cast<int32_t>(node->float_val);
+			return true;
+
 		case ast_operator_type::AST_OP_LEAF_VAR_ID: {
 			Value * constValue = module->lookupValue(node->name);
-			if (constValue == nullptr || !constValue->isConstValue() || !constValue->hasConstIntValue()) {
+			if (constValue == nullptr || !constValue->isConstValue()) {
 				return false;
 			}
-			value = constValue->getConstIntValue();
-			return true;
+			if (constValue->hasConstIntValue()) {
+				value = constValue->getConstIntValue();
+				return true;
+			}
+			if (constValue->hasConstFloatValue()) {
+				value = static_cast<int32_t>(constValue->getConstFloatValue());
+				return true;
+			}
+			return false;
 		}
 
 		case ast_operator_type::AST_OP_INIT_LIST:
@@ -1521,6 +1714,135 @@ bool IRGenerator::eval_global_const_expr(ast_node * node, int32_t & value)
 	}
 }
 
+bool IRGenerator::eval_global_const_float(ast_node * node, float & value)
+{
+	if (node == nullptr) {
+		return false;
+	}
+
+	switch (node->node_type) {
+		case ast_operator_type::AST_OP_LEAF_LITERAL_UINT:
+			value = static_cast<float>(node->integer_val);
+			return true;
+
+		case ast_operator_type::AST_OP_LEAF_LITERAL_FLOAT:
+			value = node->float_val;
+			return true;
+
+		case ast_operator_type::AST_OP_LEAF_VAR_ID: {
+			Value * constValue = module->lookupValue(node->name);
+			if (constValue == nullptr || !constValue->isConstValue()) {
+				return false;
+			}
+			if (constValue->hasConstFloatValue()) {
+				value = constValue->getConstFloatValue();
+				return true;
+			}
+			if (constValue->hasConstIntValue()) {
+				value = static_cast<float>(constValue->getConstIntValue());
+				return true;
+			}
+			return false;
+		}
+
+		case ast_operator_type::AST_OP_INIT_LIST:
+			if (node->sons.empty()) {
+				value = 0.0f;
+				return true;
+			}
+			return eval_global_const_float(node->sons[0], value);
+
+		case ast_operator_type::AST_OP_NOT: {
+			if (node->sons.size() != 1) {
+				return false;
+			}
+			float operand = 0.0f;
+			if (!eval_global_const_float(node->sons[0], operand)) {
+				return false;
+			}
+			value = operand == 0.0f ? 1.0f : 0.0f;
+			return true;
+		}
+
+		case ast_operator_type::AST_OP_ADD:
+		case ast_operator_type::AST_OP_SUB:
+		case ast_operator_type::AST_OP_MUL:
+		case ast_operator_type::AST_OP_DIV:
+		case ast_operator_type::AST_OP_MOD:
+		case ast_operator_type::AST_OP_EQ:
+		case ast_operator_type::AST_OP_NE:
+		case ast_operator_type::AST_OP_LT:
+		case ast_operator_type::AST_OP_LE:
+		case ast_operator_type::AST_OP_GT:
+		case ast_operator_type::AST_OP_GE:
+		case ast_operator_type::AST_OP_LAND:
+		case ast_operator_type::AST_OP_LOR: {
+			if (node->sons.size() != 2) {
+				return false;
+			}
+
+			float lhs = 0.0f;
+			float rhs = 0.0f;
+			if (!eval_global_const_float(node->sons[0], lhs) || !eval_global_const_float(node->sons[1], rhs)) {
+				return false;
+			}
+
+			switch (node->node_type) {
+				case ast_operator_type::AST_OP_ADD:
+					value = lhs + rhs;
+					return true;
+				case ast_operator_type::AST_OP_SUB:
+					value = lhs - rhs;
+					return true;
+				case ast_operator_type::AST_OP_MUL:
+					value = lhs * rhs;
+					return true;
+				case ast_operator_type::AST_OP_DIV:
+					if (rhs == 0.0f) {
+						return false;
+					}
+					value = lhs / rhs;
+					return true;
+				case ast_operator_type::AST_OP_MOD:
+					if (rhs == 0.0f) {
+						return false;
+					}
+					value = std::fmod(lhs, rhs);
+					return true;
+				case ast_operator_type::AST_OP_EQ:
+					value = lhs == rhs ? 1.0f : 0.0f;
+					return true;
+				case ast_operator_type::AST_OP_NE:
+					value = lhs != rhs ? 1.0f : 0.0f;
+					return true;
+				case ast_operator_type::AST_OP_LT:
+					value = lhs < rhs ? 1.0f : 0.0f;
+					return true;
+				case ast_operator_type::AST_OP_LE:
+					value = lhs <= rhs ? 1.0f : 0.0f;
+					return true;
+				case ast_operator_type::AST_OP_GT:
+					value = lhs > rhs ? 1.0f : 0.0f;
+					return true;
+				case ast_operator_type::AST_OP_GE:
+					value = lhs >= rhs ? 1.0f : 0.0f;
+					return true;
+				case ast_operator_type::AST_OP_LAND:
+					value = (lhs != 0.0f && rhs != 0.0f) ? 1.0f : 0.0f;
+					return true;
+				case ast_operator_type::AST_OP_LOR:
+					value = (lhs != 0.0f || rhs != 0.0f) ? 1.0f : 0.0f;
+					return true;
+				default:
+					return false;
+			}
+		}
+
+		default:
+			return false;
+	}
+}
+
 // 函数调用AST节点翻译成线性中间IR
 bool IRGenerator::ir_function_call(ast_node * node)
 {
@@ -1587,7 +1909,11 @@ bool IRGenerator::ir_function_call(ast_node * node)
 			Value * realValue = emitRValue(temp->val, "arg");
 			Type * realType = realValue != nullptr ? realValue->getType() : nullptr;
 			Type * formalType = formalParams[index]->getType();
-			if (realType == nullptr || formalType == nullptr || realType->getTypeID() != formalType->getTypeID()) {
+			if (realType != nullptr && formalType != nullptr && (formalType->isFloatType() || formalType->isInt32Type())) {
+				realValue = convertValueToType(realValue, formalType, "argcast");
+				realType = realValue != nullptr ? realValue->getType() : nullptr;
+			}
+			if (realType == nullptr || formalType == nullptr || realType->toString() != formalType->toString()) {
 				report_ir_error(
 					"E1202",
 					lineno,

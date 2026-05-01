@@ -14,14 +14,17 @@ grammar MiniC;
 // 源文件编译单元定义
 compUnit: (funcDef | varDecl | constDecl)* EOF;
 
-// 函数定义，目前支持int返回类型和int/数组形参
-funcDef: T_INT T_ID T_L_PAREN funcFParams? T_R_PAREN block;
+// 函数定义，返回类型使用funcType
+funcDef: funcType T_ID T_L_PAREN funcFParams? T_R_PAREN block;
+
+// 函数返回类型
+funcType: T_INT | T_VOID | T_FLOAT;
 
 // 函数形参列表
 funcFParams: funcFParam (T_COMMA funcFParam)*;
 
-// 函数形参，支持int标量和数组形参
-funcFParam: T_INT T_ID funcArrayDims?;
+// 函数形参，支持基本类型标量和数组形参
+funcFParam: basicType T_ID funcArrayDims?;
 
 // 函数形参数组维度，第一维按C/SysY规则省略
 funcArrayDims: T_L_BRACKET T_R_BRACKET (T_L_BRACKET expr T_R_BRACKET)*;
@@ -39,7 +42,7 @@ blockItem: statement | varDecl | constDecl;
 varDecl: basicType varDef (T_COMMA varDef)* T_SEMICOLON;
 
 // 基本类型
-basicType: T_INT;
+basicType: T_INT | T_FLOAT;
 
 // 常量声明
 constDecl: T_CONST basicType constDef (T_COMMA constDef)* T_SEMICOLON;
@@ -99,8 +102,8 @@ unaryExp: unaryOp unaryExp | primaryExp | T_ID T_L_PAREN realParamList? T_R_PARE
 // 一元运算符
 unaryOp: T_ADD | T_SUB | T_NOT;
 
-// 基本表达式：括号表达式、整数、左值表达式
-primaryExp: T_L_PAREN expr T_R_PAREN | T_DIGIT | lVal;
+// 基本表达式：括号表达式、整数、浮点数、左值表达式
+primaryExp: T_L_PAREN expr T_R_PAREN | T_DIGIT | T_FLOAT_LITERAL | lVal;
 
 // 实参列表
 realParamList: expr (T_COMMA expr)*;
@@ -145,6 +148,7 @@ T_BREAK: 'break';
 T_CONTINUE: 'continue';
 T_RETURN: 'return';
 T_INT: 'int';
+T_FLOAT: 'float';
 T_CONST: 'const';
 T_VOID: 'void';
 
@@ -152,6 +156,10 @@ T_VOID: 'void';
 T_ID: [a-zA-Z_][a-zA-Z0-9_]*;
 fragment T_HEX_DIGIT: [0-9a-fA-F];
 fragment T_OCT_DIGIT: [0-7];
+T_FLOAT_LITERAL:
+	([0-9]+ '.' [0-9]* | '.' [0-9]+) ([eE] [+-]? [0-9]+)?
+	| [0-9]+ [eE] [+-]? [0-9]+
+	| '0' [xX] ([0-9a-fA-F]+ '.' [0-9a-fA-F]* | '.' [0-9a-fA-F]+ | [0-9a-fA-F]+) [pP] [+-]? [0-9]+;
 T_DIGIT: '0' [xX] T_HEX_DIGIT+ | '0' T_OCT_DIGIT* | [1-9][0-9]*;
 LINE_COMMENT: '//' ~[\r\n]* -> skip;
 BLOCK_COMMENT: '/*' .*? '*/' -> skip;

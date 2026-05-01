@@ -155,6 +155,10 @@ public:
 	// attr 无符号整数字面量
 	ast_node(digit_int_attr attr);
 
+	// 针对浮点数字面量的构造函数
+	// attr 浮点数字面量
+	ast_node(digit_real_attr attr);
+
 	// 针对标识符ID的叶子构造函数
 	// attr 字符型标识符
 	ast_node(var_id_attr attr);
@@ -176,6 +180,11 @@ public:
 	// val 词法值
 	// line_no 行号
 	static ast_node * New(digit_int_attr attr);
+
+	// 创建浮点数的叶子节点
+	// val 词法值
+	// line_no 行号
+	static ast_node * New(digit_real_attr attr);
 
 	// 创建标识符的叶子节点
 	// val 词法值

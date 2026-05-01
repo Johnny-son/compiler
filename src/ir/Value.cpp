@@ -89,6 +89,25 @@ int32_t Value::getConstIntValue() const
 	return constIntValue;
 }
 
+/// @brief 记录源语言const浮点值
+void Value::setConstFloatValue(float value)
+{
+	constFloatValue = value;
+	constFloatValueValid = true;
+}
+
+/// @brief 是否有源语言const浮点值
+bool Value::hasConstFloatValue() const
+{
+	return constFloatValueValid;
+}
+
+/// @brief 获取源语言const浮点值
+float Value::getConstFloatValue() const
+{
+	return constFloatValue;
+}
+
 ///
 /// @brief 增加一条边，增加Value被使用次数
 /// @param use

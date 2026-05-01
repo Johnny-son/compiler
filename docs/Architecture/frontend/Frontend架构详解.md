@@ -50,12 +50,20 @@
 
 当前文法覆盖：
 
-- 编译单元：`compUnit: (funcDef | varDecl)* EOF;`
-- 函数定义：`int` 返回、可选 `int` 标量形参列表、函数体、函数调用与实参列表
-- 声明：`int` 变量/常量声明、逗号分隔、可选初始化，支持一维和多维数组
+- 编译单元：`compUnit: (funcDef | varDecl | constDecl)* EOF;`
+- 函数定义：`funcType` 返回、可选基本类型形参列表、函数体、函数调用与实参列表
+- 类型：函数返回支持 `int/void/float`，变量、常量和形参基本类型支持 `int/float`
+- 声明：变量/常量声明、逗号分隔、可选初始化，支持一维和多维数组
 - 语句：`return`、赋值、`if/else`、`while`、`break/continue`、块、表达式语句、空语句
 - 表达式：关系表达式、相等表达式、逻辑与/或、一元 `+/-/!`、算术表达式、基本表达式、数组下标左值
-- 词法 token：关键字、标识符、数字、注释、空白
+- 词法 token：关键字、标识符、整数/浮点数字面量、注释、空白
+
+类型相关规则：
+
+```text
+funcType  -> T_INT | T_VOID | T_FLOAT
+basicType -> T_INT | T_FLOAT
+```
 
 数组相关规则：
 
@@ -63,7 +71,7 @@
 varDef        -> T_ID arrayDims? (T_ASSIGN initVal)?
 constDef      -> T_ID arrayDims? T_ASSIGN initVal
 arrayDims     -> ('[' expr ']')+
-funcFParam    -> T_INT T_ID funcArrayDims?
+funcFParam    -> basicType T_ID funcArrayDims?
 funcArrayDims -> '[' ']' ('[' expr ']')*
 initVal       -> expr | '{' (initVal (',' initVal)*)? '}'
 lVal          -> T_ID ('[' expr ']')*
@@ -72,7 +80,7 @@ lVal          -> T_ID ('[' expr ']')*
 设计含义：
 
 - 声明维度先保留为 AST 表达式，不在前端求值。
-- `int a[]` 这类函数形参数组允许第一维省略。
+- `int a[]` / `float a[]` 这类函数形参数组允许第一维省略。
 - 初始化列表保留嵌套结构，后续由 IR 层按数组类型展开。
 
 与其它文件关系：
@@ -112,6 +120,7 @@ lVal          -> T_ID ('[' expr ']')*
 核心内容：
 
 - `enum class ast_operator_type`：叶子节点 + 内部节点（函数定义、块、return、赋值、分支、循环、关系/逻辑运算等）。
+- 叶子节点已覆盖整数字面量和浮点数字面量，类型由 `IntegerType` / `FloatType` 标记。
 - 数组新增节点：`AST_OP_ARRAY_DIMS`、`AST_OP_ARRAY_ACCESS`、`AST_OP_INIT_LIST`。
 - `ast_node` 构造/工厂接口：`New(...)`、`create_func_def(...)`、`create_func_call(...)` 等。
 - 树操作接口：`insert_son_node`、`Delete`。
@@ -193,6 +202,7 @@ lVal          -> T_ID ('[' expr ']')*
 
 - 编译单元：`visitCompUnit` 按源程序出现顺序构造全局声明与函数定义。
 - 函数定义：`visitFuncDef` 组装返回类型、函数名、函数体。
+- 类型节点：`visitFuncType/visitBasicType` 分别处理函数返回类型和变量/形参基本类型。
 - 块与语句：`visitBlock/visitBlockItemList/visitStatement`，覆盖 `if/while/break/continue`。
 - 表达式树：`visitRelExp/visitEqExp/visitLAndExp/visitLOrExp` 与 `visitAddExp/visitMulExp/visitUnaryExp/visitPrimaryExp` 共同维护优先级与结合性。
 - 调用与参数：`visitRealParamList` 构建 `AST_OP_FUNC_REAL_PARAMS`。
@@ -200,11 +210,12 @@ lVal          -> T_ID ('[' expr ']')*
 - 常量声明：`visitConstDecl` 支持标量常量、数组常量和初始化列表。
 - 数组访问：`visitLVal` 在有下标时生成 `AST_OP_ARRAY_ACCESS`，孩子是各维下标表达式。
 - 初始化列表：`visitInitVal` 将花括号结构转换为 `AST_OP_INIT_LIST`，普通表达式保持原表达式节点。
-- 函数形参：`visitFuncFParam` 支持数组形参，并通过 `AST_OP_ARRAY_DIMS` 记录省略第一维后的维度表达式。
+- 函数形参：`visitFuncFParam` 支持 `int/float` 标量和数组形参，并通过 `AST_OP_ARRAY_DIMS` 记录省略第一维后的维度表达式。
 
 重要设计细节：
 
 - 一元负号被翻译成 `0 - expr` 的二元减法树，复用后续中端算术逻辑；一元正号直接透传，逻辑非生成独立节点。
+- 浮点字面量在前端解析成 `AST_OP_LEAF_LITERAL_FLOAT`，十进制、科学计数法和十六进制浮点常量都交给 IR 层继续处理。
 - 空语句返回 `nullptr`，由上层 block 插入时跳过。
 - 数组维度和初始化列表只做结构化，不在前端阶段展开；这样可以复用 IR 层已有的常量表达式求值和 `ArrayType` 构造。
 

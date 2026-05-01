@@ -38,6 +38,12 @@ protected:
 	/// @brief 源语言const整型值，供常量表达式求值使用
 	int32_t constIntValue = 0;
 
+	/// @brief 是否记录了源语言const浮点值
+	bool constFloatValueValid = false;
+
+	/// @brief 源语言const浮点值，供常量表达式求值使用
+	float constFloatValue = 0.0f;
+
 	///
 	/// @brief define-use链，这个定值被使用的所有边，即所有的User
 	///
@@ -98,6 +104,15 @@ public:
 
 	/// @brief 获取源语言const整型值
 	[[nodiscard]] int32_t getConstIntValue() const;
+
+	/// @brief 记录源语言const浮点值
+	void setConstFloatValue(float value);
+
+	/// @brief 是否有源语言const浮点值
+	[[nodiscard]] bool hasConstFloatValue() const;
+
+	/// @brief 获取源语言const浮点值
+	[[nodiscard]] float getConstFloatValue() const;
 
 	///
 	/// @brief 增加一条边，增加Value被使用次数

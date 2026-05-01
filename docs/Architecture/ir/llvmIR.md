@@ -570,6 +570,7 @@ LLVM IR 是强类型的。常见类型：
 i1          条件
 i8          byte / char
 i32         32 位整数
+float       32 位浮点
 void        无返回值
 ptr         现代 opaque pointer
 [10 x i32]  数组
@@ -580,6 +581,7 @@ ptr         现代 opaque pointer
 
 ```llvm
 %z = add i32 %x, %y
+%f = fadd float %a, %b
 %cond = icmp slt i32 %x, 0
 br i1 %cond, label %a, label %b
 ```
@@ -595,7 +597,21 @@ br i32 %x, label %a, label %b
 
 ```text
 i32 条件 -> icmp ne i32 value, 0 -> i1
+float 条件 -> fcmp one float value, 0.0 -> i1
 比较表达式作为普通值 -> icmp 得 i1，再 zext 到 i32
+int -> float -> sitofp
+float -> int -> fptosi
+```
+
+当前项目的 float 接入约定：
+
+```text
+float 字面量      -> ConstFloat，输出 LLVM 十六进制浮点常量文本
+float 算术        -> fadd/fsub/fmul/fdiv
+float 比较        -> fcmp oeq/one/olt/ole/ogt/oge，再 zext 到 i32
+float 数组        -> ArrayType(FloatType)，GEP/load/store 路径与 int 数组一致
+int/float 混合表达式 -> 先按需要插入 sitofp/fptosi
+void 函数         -> ReturnInst::createRetVoid 或函数尾部自动补 ret void
 ```
 
 ---
@@ -845,6 +861,8 @@ load/store/GEP 的元素类型仍需要明确。
 | call | `CallInst` | 函数调用 |
 | phi | `PhiInst` | SSA 合流，可先预留 |
 | GEP | `GetElementPtrInst` | 数组、结构体、指针元素地址计算 |
+| fcmp | `FCmpInst` | 浮点比较 |
+| cast | `CastInst` | `sitofp` / `fptosi` |
 | verifier | 待补充 | 强烈建议添加 |
 
 ---
@@ -886,7 +904,20 @@ GetElementPtrInst
 数组初始化列表展开
 ```
 
-### 22.4 准备 SSA / phi
+### 22.4 扩展 void / float
+
+```text
+funcType -> int / void / float
+basicType -> int / float
+FloatType
+ConstFloat
+BinaryInst 浮点 op
+FCmpInst
+CastInst
+运行库 getfloat/getfarray/putfloat/putfarray 声明
+```
+
+### 22.5 准备 SSA / phi
 
 短期保留 memory-based。
 

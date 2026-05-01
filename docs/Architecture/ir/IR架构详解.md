@@ -729,6 +729,10 @@ insert(inst, name)
 
 **功能**：创建整数加、减、乘、有符号除、有符号取余。
 
+### `createFAdd` / `createFSub` / `createFMul` / `createFDiv`
+
+**功能**：创建单精度浮点加、减、乘、除。
+
 **输入**：
 
 | 类型 | 名称 | 含义 |
@@ -755,6 +759,12 @@ insert(inst, name)
 
 **实现逻辑**：用对应 `ICmpInst::Predicate` 构造比较指令并插入。
 
+### `createFCmpOEQ` / `createFCmpONE` / `createFCmpOLT` / `createFCmpOLE` / `createFCmpOGT` / `createFCmpOGE`
+
+**功能**：创建浮点比较，结果同样是 `i1`。
+
+**实现逻辑**：用有序浮点比较谓词构造 `FCmpInst` 并插入。
+
 ---
 
 ## 6.8 类型转换
@@ -768,6 +778,12 @@ insert(inst, name)
 **输出**：`ZExtInst *`。
 
 **实现逻辑**：构造 `ZExtInst` 并插入当前块。
+
+### `createSIToFP` / `createFPToSI`
+
+**功能**：创建 `int -> float` 和 `float -> int` 的隐式转换指令。
+
+**实现逻辑**：构造 `CastInst`，分别输出 `sitofp` 和 `fptosi`。
 
 ---
 
@@ -1043,7 +1059,7 @@ insert(inst, name)
 
 ## 8.1 类型判断
 
-### `isVoidType()` / `isLabelType()` / `isFunctionType()` / `isIntegerType()` / `isPointerType()` / `isArrayType()`
+### `isVoidType()` / `isLabelType()` / `isFunctionType()` / `isIntegerType()` / `isFloatType()` / `isPointerType()` / `isArrayType()`
 
 **功能**：判断类型种类。
 
@@ -1059,7 +1075,7 @@ insert(inst, name)
 
 **输入**：无。
 
-**输出**：例如 `i32`、`i1`、`void`、`label`、`i32*`。
+**输出**：例如 `i32`、`i1`、`float`、`void`、`label`、`i32*`。
 
 **实现逻辑**：由具体子类实现。
 
@@ -1078,6 +1094,7 @@ insert(inst, name)
 | 类型类 | 功能 | 用途 |
 |---|---|---|
 | `IntegerType` | 整数类型，如 `i32`、`i1` | 变量、表达式、条件 |
+| `FloatType` | 单精度浮点类型，如 `float` | 浮点变量、表达式、函数参数 |
 | `VoidType` | void | void 函数 |
 | `LabelType` | label | 基本块 |
 | `PointerType` | 指针 | alloca、global、load/store、GEP |
@@ -1153,7 +1170,9 @@ insert(inst, name)
 | `StoreInst` | 写地址 | 函数、值、指针 | void |
 | `BinaryInst` | 算术运算 | op、lhs、rhs | 运算结果 |
 | `ICmpInst` | 整数比较 | predicate、lhs、rhs | i1 |
+| `FCmpInst` | 浮点比较 | predicate、lhs、rhs | i1 |
 | `ZExtInst` | 零扩展 | value、target type | 扩展结果 |
+| `CastInst` | int/float 转换 | op、value、target type | 转换结果 |
 | `GetElementPtrInst` | 地址计算 | basePtr、indices | 地址值 |
 | `CallInst` | 函数调用 | callee、args | 返回值或 void |
 | `PhiInst` | SSA 合流 | type、incoming | 合流结果 |
@@ -1178,7 +1197,7 @@ insert(inst, name)
 
 ```text
 value == nullptr          -> nullptr
-value 是 ConstInt         -> 原样返回
+value 是 ConstInt/ConstFloat -> 原样返回
 value 是数组对象地址      -> decayArrayToPointer(value)
 value 是数组型 GlobalVariable -> decayArrayToPointer(value)
 value 是普通 GlobalVariable -> builder.createLoad(value, name)
@@ -1196,11 +1215,25 @@ value 的类型是 PointerType -> builder.createLoad(value, name)
 
 **输出**：`i1` 条件值。
 
-**实现逻辑**：先 `emitRValue(value, "cond")`；如果已经是 `i1`，直接返回；否则生成 `icmp ne value, 0`。
+**实现逻辑**：先 `emitRValue(value, "cond")`；如果已经是 `i1`，直接返回；如果是 `float`，生成 `fcmp one value, 0.0`；否则生成 `icmp ne value, 0`。
+
+## 11.3 `Value * convertValueToType(Value * value, Type * targetType, const std::string & name = "")`
+
+**功能**：按目标类型插入必要的隐式转换。
+
+**实现逻辑**：
+
+```text
+目标类型相同        -> 原样返回
+i1 -> i32          -> zext
+i1/i32 -> float    -> zext(必要时) + sitofp
+float -> i32       -> fptosi
+其它不兼容类型      -> nullptr
+```
 
 ---
 
-## 11.3 `AllocaInst * createEntryAlloca(Function * func, Type * type, const std::string & name)`
+## 11.4 `AllocaInst * createEntryAlloca(Function * func, Type * type, const std::string & name)`
 
 **功能**：在函数入口块前部创建 alloca。
 
@@ -1224,7 +1257,7 @@ new AllocaInst(func, type)
 
 ---
 
-## 11.4 数组辅助接口
+## 11.5 数组辅助接口
 
 数组相关辅助接口负责把前端保留的维度和初始化列表落成 LLVM 风格 IR。
 
@@ -1237,9 +1270,10 @@ buildArrayTypeFromDims()
   -> 由内向外构造 ArrayType
 
 buildFormalParamType()
-  -> 标量形参保持 i32
+  -> 标量形参保持原基本类型
   -> int a[] 降成 i32*
-  -> int a[][N] 降成 [N x i32]*
+  -> float a[] 降成 float*
+  -> int/float a[][N] 降成 [N x elem]*
 
 isArrayObjectAddress()
   -> 判断 Value 是否是数组对象地址
@@ -1257,6 +1291,9 @@ emitArrayInitializerStores()
 
 buildGlobalArrayInitializer()
   -> 全局数组初始化：生成 LLVM 聚合常量文本
+
+buildScalarInitializerText()
+  -> 全局标量初始化：按 int/float 类型生成常量文本
 ```
 
 ---
@@ -1388,7 +1425,7 @@ decl
 局部数组：
 
 ```text
-type = buildArrayTypeFromDims(arrayDims, i32)
+type = buildArrayTypeFromDims(arrayDims, baseType)
 addr = createEntryAlloca(func, type, name)
 module->bindValue(name, addr)
 如果有初始化：
@@ -1401,7 +1438,7 @@ module->bindValue(name, addr)
 全局数组：
 
 ```text
-type = buildArrayTypeFromDims(arrayDims, i32)
+type = buildArrayTypeFromDims(arrayDims, baseType)
 global = module->newVarValue(type, name)
 如果有初始化：
     buildGlobalArrayInitializer() 生成聚合常量

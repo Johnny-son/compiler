@@ -126,6 +126,8 @@ protected:
 
 	Value * emitRValue(Value * value, const std::string & name = "");
 	Value * emitCondValue(Value * value);
+	Value * convertValueToType(Value * value, Type * targetType, const std::string & name = "");
+	Value * zeroValueForType(Type * type);
 	AllocaInst * createEntryAlloca(Function * func, Type * type, const std::string & name);
 
 	ast_node * getDeclDimsNode(ast_node * node) const;
@@ -138,6 +140,8 @@ protected:
 	bool fillArrayInitializer(ast_node * initNode, Type * type, std::vector<ast_node *> & slots, size_t baseIndex);
 	bool emitArrayInitializerStores(Value * arrayAddr, Type * arrayType, ast_node * initNode);
 	bool buildGlobalArrayInitializer(Type * arrayType, ast_node * initNode, std::string & initializerText);
+	bool eval_global_const_float(ast_node * node, float & value);
+	bool buildScalarInitializerText(Type * type, ast_node * initNode, std::string & initializerText);
 	std::vector<int32_t> getArrayDimensions(Type * arrayType) const;
 	size_t getFlattenElementCount(Type * type) const;
 	std::vector<int32_t> flattenIndexToIndices(size_t flatIndex, const std::vector<int32_t> & dims) const;

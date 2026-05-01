@@ -24,6 +24,8 @@ CMake custom command
 - 对运算优先级改动必须同时验证 `relExp/eqExp/lAndExp/lOrExp/addExp/mulExp/unaryExp` 分层。
 - `if/else`、`while`、函数形参与实参列表这类成组规则，改文法时要连同 `statement/funcDef/unaryExp` 入口一起检查。
 - 数组语法需要同时覆盖声明维度、左值下标、初始化列表和函数形参数组退化；当前入口是 `arrayDims/funcArrayDims/initVal/lVal`。
+- 基本类型扩展时要区分 `funcType` 和 `basicType`：函数返回允许 `void`，变量、常量和形参不允许 `void`。
+- 浮点常量需要覆盖普通小数、科学计数法和十六进制浮点形式，词法规则必须放在整数字面量规则之前。
 
 常见坑位：
 
@@ -46,6 +48,7 @@ CSTVisitor::visit*
 修改建议：
 
 - 新增 token 属性（如字符串字面量）时优先扩这里，再扩 AST 构造。
+- 新增基本类型时同步扩 `BasicType`、`type_attr` 到 `Type` 的映射，以及 CSTVisitor 的类型规则。
 
 常见坑位：
 
@@ -70,6 +73,7 @@ IRGenerator::run
 - 新语法节点要先扩 `ast_operator_type`，再补工厂函数，最后补 visitor。
 - 对 `ast_node` 字段新增尽量保持“语法字段”与“中端暂存字段”边界清晰。
 - 数组相关节点当前是 `AST_OP_ARRAY_DIMS`、`AST_OP_ARRAY_ACCESS`、`AST_OP_INIT_LIST`；函数形参数组第一维省略用 `firstArrayDimOmitted` 标记。
+- 浮点字面量使用 `AST_OP_LEAF_LITERAL_FLOAT`，节点类型设置为 `FloatType`。
 
 常见坑位：
 
@@ -161,6 +165,7 @@ ASTGenerator::run
 
 - 新文法规则要先在此声明 override，再在 `.cpp` 实现。
 - 数组规则新增后，需要声明 `visitArrayDims`、`visitFuncArrayDims`、`visitInitVal`，否则生成基类方法不会被项目 visitor 接住。
+- 增加 `funcType` 后，需要声明并实现 `visitFuncType`，否则函数返回类型会继续被旧的 `T_INT` 路径固定住。
 
 常见坑位：
 
@@ -189,13 +194,14 @@ run
 - `visitCompUnit` 必须保留源码顺序，避免把全局声明和函数定义重排。
 - `visitBlockItem` 需要同时处理 `statement | varDecl | constDecl`。
 - `visitVarDecl/visitConstDecl` 中数组声明的孩子顺序固定为：类型、名字、可选 `AST_OP_ARRAY_DIMS`、可选初始化。
+- `visitFuncDef` 读取 `funcType`，`visitVarDecl/visitConstDecl/visitFuncFParam` 读取 `basicType`，避免把 `void` 误放进变量声明。
 - `visitLVal` 中无下标仍生成普通标识符叶子；带下标才生成 `AST_OP_ARRAY_ACCESS`。
 - `visitInitVal` 中普通表达式直接返回表达式节点，花括号初始化生成 `AST_OP_INIT_LIST`，支持空列表和嵌套列表。
-- `visitFuncFParam` 中 `int a[]` 或 `int a[][N]` 会把 `AST_OP_ARRAY_DIMS` 挂到形参节点下，第一维省略交给 IR 层降成指针。
+- `visitFuncFParam` 中 `int a[]`、`float a[]` 或多维数组形参会把 `AST_OP_ARRAY_DIMS` 挂到形参节点下，第一维省略交给 IR 层降成指针。
 
 常见坑位：
 
-- 一元负号当前转成 `0 - expr`，如果后续加入类型系统需注意常量 0 的类型。
+- 一元负号当前转成 `0 - expr`，IR 层会按右侧类型做 int/float 隐式转换。
 - `visitExpressionStatement` 返回 `nullptr` 表示空语句，上层插入孩子前必须判空。
 - 给新运算符补了文法却没同步 `buildLeftAssociativeBinaryTree` 的操作符映射，会生成错误 AST。
 - 把 `visitCompUnit` 写成“先收集变量、再收集函数”会破坏源码顺序。
