@@ -1,6 +1,7 @@
 // 函数实现
 
 #include <cctype>
+#include <cstddef>
 #include <string>
 
 #include "Function.h"
@@ -94,8 +95,9 @@ const std::vector<BasicBlock *> & Function::getBasicBlocks() const
 
 std::string Function::allocateLocalName(const std::string & hint)
 {
+	constexpr std::size_t kMaxReadableHintLength = 120;
 	std::string candidate;
-	if (hint.empty()) {
+	if (hint.empty() || hint.size() > kMaxReadableHintLength) {
 		do {
 			candidate = "%" + std::to_string(nameCounter++);
 		} while (usedLocalNames.find(candidate) != usedLocalNames.end());

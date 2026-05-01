@@ -949,6 +949,12 @@ run_mode_suite() {
   exit_code=$?
   set -e
 
+    if [[ -s "${result_file}" ]]; then
+      last_byte="$(tail -c 1 "${result_file}" | od -An -tx1 | tr -d '[:space:]')"
+      if [[ "${last_byte}" != "0a" ]]; then
+        printf "\n" >> "${result_file}"
+      fi
+    fi
     printf "%s\n" "${exit_code}" >> "${result_file}"
 
     if diff -a --strip-trailing-cr "${result_file}" "${output_file}" >/dev/null; then
