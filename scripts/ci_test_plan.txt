@@ -11,12 +11,12 @@ ir:
 2023_func_00_main.c
 2023_func_01_var_defn2.c
 2023_func_02_var_defn3.c
-# 2023_func_03_arr_defn2.c
-# 2023_func_04_arr_defn3.c
-# 2023_func_05_arr_defn4.c
+2023_func_03_arr_defn2.c
+2023_func_04_arr_defn3.c
+2023_func_05_arr_defn4.c
 2023_func_06_const_var_defn2.c
 2023_func_07_const_var_defn3.c
-# 2023_func_08_const_array_defn.c
+2023_func_08_const_array_defn.c
 2023_func_09_func_defn.c
 2023_func_10_var_defn_func.c
 2023_func_11_add2.c
@@ -40,9 +40,12 @@ ir:
 2023_func_31_while_if_test1.c
 2023_func_32_while_if_test2.c
 2023_func_33_while_if_test3.c
+2023_func_34_arr_expr_len.c
 2023_func_38_op_priority4.c
 2023_func_40_unary_op.c
 2023_func_43_logi_assign.c
+2023_func_57_sort_test3.c
+2023_func_59_sort_test5.c
 test/stage1_params/param_basic.c
 test/stage1_params/param_multi.c
 test/stage1_params/param_assign.c

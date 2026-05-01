@@ -1,4 +1,4 @@
-# IR 改造成迷你 LLVM 的设计方案
+# IR 改造成迷你 LLVM 的设计方案 (已完成)
 
 ## 目标
 
@@ -36,6 +36,7 @@
 - `IRGenerator` 已改为用 `IRBuilder` 生成标量变量、函数参数、赋值、算术、比较、函数调用、全局变量、`if/while/break/continue/return` 和 `&&/||/!`。
 - `AST_OP_CONST_DECL` 已接入 `IRGenerator`，常量声明会标记对应地址 `Value` 的 const 属性。
 - `ir_assign()` 已在生成 `store` 前检查 const 左值，常量重新赋值会报 `E1303`。
+- 数组声明、数组访问、数组初始化和数组形参已经接入：前端生成 `AST_OP_ARRAY_DIMS` / `AST_OP_ARRAY_ACCESS` / `AST_OP_INIT_LIST`，IR 层生成 `ArrayType` 和 `GetElementPtrInst`。
 - 局部变量和短路表达式的临时结果都走 entry block `alloca`，读写用 `load/store`。
 - `IRBuilder` 和 `IRGenerator::ir_block()` 已拦截 terminator 后继续插入普通指令，避免生成 `ret/br` 后的非法死代码。
 - ASM 后端的 `IRAdapter`、`FrameLayout`、`InstructionSelector` 已改为消费 `Function::getBasicBlocks()` 和新的 LLVM 指令类，不再读取旧 `InterCode`。
@@ -43,18 +44,19 @@
 
 当前仍是过渡状态：
 
-- 当前前端 AST 中还没有数组下标表达式节点，因此 `ArrayType` 和 `GetElementPtrInst` 已作为 IR 库能力实现，但数组声明/数组元素访问还没有接入 `IRGenerator`。
+- 数组主链路已经接通，但 `void` 函数和浮点数组还没有接入，因此 2023 后段部分数组/矩阵用例仍不会进入 IR 阶段。
 - `PhiInst` 已预留基础类和输出能力，第一版逻辑表达式仍使用 alloca 合并值，不主动生成 phi。
 - ASM 后端已经能从新 IR 生成非空汇编；当前环境缺少 RISC-V assembler/linker，因此只能验证汇编文本生成和本地构建，不能运行完整 ASM 用例。
 
 已验证：
 
 - `cmake --build build-local` 通过。
-- `scripts/run_ci_tests.sh -ir --all --compiler ./build-local/compiler --show-failures` 通过，结果 `OK number=36, NG number=0`。
+- `scripts/run_ci_tests.sh -ir --all --compiler ./build-local/compiler --show-failures` 通过，数组用例接入后结果 `OK number=43, NG number=0`。
 - `scripts/run_ci_tests.sh -err --all --compiler ./build-local/compiler --show-failures` 通过，结果 `OK number=10, NG number=0`。
+- `scripts/run_ci_tests.sh --all --compiler ./build-local/compiler --show-failures` 已能正常读取空 AST 段并继续执行；当前 IR/ERR 通过，ASM 段因本机缺少 RISC-V assembler/linker 失败。
 - `./build-local/compiler -S -o /tmp/minic_main_new.s test/contesttestcases/2023_function/2023_func_00_main.c` 可生成包含 prologue/return 的非空 RISC-V 汇编。
 - 额外检查短路用例 `2023_func_50_short_circuit.c`：生成的 `.ll` 可被 `clang` 编译并运行，程序语义输出为 `11111210`；该用例不在当前 IR 计划中，脚本 mismatch 来自程序无尾部换行时测试脚本追加退出码会和最后一个数字粘连。
-- `scripts/run_ci_tests.sh` 已去掉 `mapfile` 依赖，当前 macOS 自带 bash 可以运行错误测试。
+- `scripts/run_ci_tests.sh` 已去掉 `mapfile` 依赖，并修复空计划段的数组展开，当前 macOS 自带 bash 可以运行 `--all` 计划。
 - `scripts/run_ci_tests.sh -asm ...` 当前环境缺少 RISC-V assembler/linker，暂不能完成链接运行。
 
 ## 当前代码的保留价值

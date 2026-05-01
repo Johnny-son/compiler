@@ -52,10 +52,28 @@
 
 - 编译单元：`compUnit: (funcDef | varDecl)* EOF;`
 - 函数定义：`int` 返回、可选 `int` 标量形参列表、函数体、函数调用与实参列表
-- 声明：`int` 变量声明、逗号分隔、可选初始化
+- 声明：`int` 变量/常量声明、逗号分隔、可选初始化，支持一维和多维数组
 - 语句：`return`、赋值、`if/else`、`while`、`break/continue`、块、表达式语句、空语句
-- 表达式：关系表达式、相等表达式、逻辑与/或、一元 `+/-/!`、算术表达式、基本表达式
+- 表达式：关系表达式、相等表达式、逻辑与/或、一元 `+/-/!`、算术表达式、基本表达式、数组下标左值
 - 词法 token：关键字、标识符、数字、注释、空白
+
+数组相关规则：
+
+```text
+varDef        -> T_ID arrayDims? (T_ASSIGN initVal)?
+constDef      -> T_ID arrayDims? T_ASSIGN initVal
+arrayDims     -> ('[' expr ']')+
+funcFParam    -> T_INT T_ID funcArrayDims?
+funcArrayDims -> '[' ']' ('[' expr ']')*
+initVal       -> expr | '{' (initVal (',' initVal)*)? '}'
+lVal          -> T_ID ('[' expr ']')*
+```
+
+设计含义：
+
+- 声明维度先保留为 AST 表达式，不在前端求值。
+- `int a[]` 这类函数形参数组允许第一维省略。
+- 初始化列表保留嵌套结构，后续由 IR 层按数组类型展开。
 
 与其它文件关系：
 
@@ -94,9 +112,10 @@
 核心内容：
 
 - `enum class ast_operator_type`：叶子节点 + 内部节点（函数定义、块、return、赋值、分支、循环、关系/逻辑运算等）。
+- 数组新增节点：`AST_OP_ARRAY_DIMS`、`AST_OP_ARRAY_ACCESS`、`AST_OP_INIT_LIST`。
 - `ast_node` 构造/工厂接口：`New(...)`、`create_func_def(...)`、`create_func_call(...)` 等。
 - 树操作接口：`insert_son_node`、`Delete`。
-- 中端复用字段：`blockInsts`、`val`。
+- 中端复用字段：`val`、`isConst`、`firstArrayDimOmitted`。
 
 该头文件是整个前端和中端沟通的核心数据协议。
 
@@ -177,12 +196,17 @@
 - 块与语句：`visitBlock/visitBlockItemList/visitStatement`，覆盖 `if/while/break/continue`。
 - 表达式树：`visitRelExp/visitEqExp/visitLAndExp/visitLOrExp` 与 `visitAddExp/visitMulExp/visitUnaryExp/visitPrimaryExp` 共同维护优先级与结合性。
 - 调用与参数：`visitRealParamList` 构建 `AST_OP_FUNC_REAL_PARAMS`。
-- 变量声明：`visitVarDecl` 支持逗号声明与可选初始化表达式。
+- 变量声明：`visitVarDecl` 支持逗号声明、数组维度与可选初始化。
+- 常量声明：`visitConstDecl` 支持标量常量、数组常量和初始化列表。
+- 数组访问：`visitLVal` 在有下标时生成 `AST_OP_ARRAY_ACCESS`，孩子是各维下标表达式。
+- 初始化列表：`visitInitVal` 将花括号结构转换为 `AST_OP_INIT_LIST`，普通表达式保持原表达式节点。
+- 函数形参：`visitFuncFParam` 支持数组形参，并通过 `AST_OP_ARRAY_DIMS` 记录省略第一维后的维度表达式。
 
 重要设计细节：
 
 - 一元负号被翻译成 `0 - expr` 的二元减法树，复用后续中端算术逻辑；一元正号直接透传，逻辑非生成独立节点。
 - 空语句返回 `nullptr`，由上层 block 插入时跳过。
+- 数组维度和初始化列表只做结构化，不在前端阶段展开；这样可以复用 IR 层已有的常量表达式求值和 `ArrayType` 构造。
 
 ---
 
@@ -305,7 +329,7 @@
 
 建议扩展顺序：
 
-1. 沿 `MiniC.g4 -> AST.h -> CSTVisitor.cpp` 的顺序继续扩数组、`const`、更多声明形态。
+1. 沿 `MiniC.g4 -> AST.h -> CSTVisitor.cpp` 的顺序继续扩 `void` 函数、浮点、字符串等更多声明形态。
 2. 把函数签名一致性、return 完整性、控制流约束等语义检查继续前移并细化阶段边界。
 3. 表达式新增时继续沿用“文法优先级分层 + Visitor 左结合构树”的模式，避免在 visitor 中手写优先级。
 4. 先用 AST 图导出和 `contesttestcases` 做结构回归，再推进中端和后端联调。

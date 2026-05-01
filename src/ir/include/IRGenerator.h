@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -108,6 +109,9 @@ protected:
 	// 常量声明节点翻译成线性中间IR
 	bool ir_const_declaration(ast_node * node);
 
+	// 数组访问节点翻译成线性中间IR
+	bool ir_array_access(ast_node * node);
+
 	// 计算全局变量初始化的常量整数表达式
 	bool eval_global_const_expr(ast_node * node, int32_t & value);
 
@@ -123,6 +127,20 @@ protected:
 	Value * emitRValue(Value * value, const std::string & name = "");
 	Value * emitCondValue(Value * value);
 	AllocaInst * createEntryAlloca(Function * func, Type * type, const std::string & name);
+
+	ast_node * getDeclDimsNode(ast_node * node) const;
+	ast_node * getDeclInitNode(ast_node * node) const;
+	bool buildArrayTypeFromDims(ast_node * dimsNode, Type * baseType, Type *& resultType, std::vector<int32_t> * dims = nullptr);
+	Type * buildArrayType(Type * baseType, const std::vector<int32_t> & dims) const;
+	Type * buildFormalParamType(ast_node * paramNode);
+	bool isArrayObjectAddress(Value * value) const;
+	Value * decayArrayToPointer(Value * value, const std::string & name = "");
+	bool fillArrayInitializer(ast_node * initNode, Type * type, std::vector<ast_node *> & slots, size_t baseIndex);
+	bool emitArrayInitializerStores(Value * arrayAddr, Type * arrayType, ast_node * initNode);
+	bool buildGlobalArrayInitializer(Type * arrayType, ast_node * initNode, std::string & initializerText);
+	std::vector<int32_t> getArrayDimensions(Type * arrayType) const;
+	size_t getFlattenElementCount(Type * type) const;
+	std::vector<int32_t> flattenIndexToIndices(size_t flatIndex, const std::vector<int32_t> & dims) const;
 
 	// 未知节点类型的节点处理
 	bool ir_default(ast_node * node);

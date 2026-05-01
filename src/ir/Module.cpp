@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "ir/Types/IntegerType.h"
+#include "ir/Types/PointerType.h"
 #include "ir/Types/VoidType.h"
 #include "ir/Values/FormalParam.h"
 #include "symboltable/ScopeStack.h"
@@ -74,6 +75,15 @@ Module::Module(std::string _name) : name(_name)
 	// 加入内置函数putint
 	(void) newFunction("putint", VoidType::getType(), {new FormalParam{IntegerType::getTypeInt(), ""}}, true);
 	(void) newFunction("getint", IntegerType::getTypeInt(), {}, true);
+	(void) newFunction("putch", VoidType::getType(), {new FormalParam{IntegerType::getTypeInt(), ""}}, true);
+	(void) newFunction("getch", IntegerType::getTypeInt(), {}, true);
+	auto * intPtrType = const_cast<PointerType *>(PointerType::get(IntegerType::getTypeInt()));
+	(void) newFunction("getarray", IntegerType::getTypeInt(), {new FormalParam{intPtrType, ""}}, true);
+	(void) newFunction(
+		"putarray",
+		VoidType::getType(),
+		{new FormalParam{IntegerType::getTypeInt(), ""}, new FormalParam{intPtrType, ""}},
+		true);
 }
 
 /// @brief 进入作用域，如进入函数体块、语句块等
@@ -395,9 +405,14 @@ std::string Module::toString() const
 	}
 
 	for (auto * var: globalVariableVector) {
-		int32_t initializer = var->hasInitializerValue() ? var->getInitializerInt() : 0;
-		str += var->getIRName() + " = global " + var->getType()->toString() + " " + std::to_string(initializer) +
-			   ", align " + std::to_string(var->getAlignment()) + "\n";
+		std::string initializer;
+		if (var->getType()->isArrayType()) {
+			initializer = var->hasInitializerText() ? var->getInitializerText() : "zeroinitializer";
+		} else {
+			initializer = std::to_string(var->hasInitializerValue() ? var->getInitializerInt() : 0);
+		}
+		str += var->getIRName() + " = global " + var->getType()->toString() + " " + initializer + ", align " +
+			   std::to_string(var->getAlignment()) + "\n";
 	}
 
 	if (!globalVariableVector.empty()) {

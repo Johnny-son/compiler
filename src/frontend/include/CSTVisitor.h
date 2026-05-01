@@ -33,6 +33,9 @@ protected:
 	// 非终结符FuncFParam的分析
 	std::any visitFuncFParam(MiniCParser::FuncFParamContext * ctx) override;
 
+	// 非终结符FuncArrayDims的分析
+	std::any visitFuncArrayDims(MiniCParser::FuncArrayDimsContext * ctx) override;
+
 	// 非终结运算符block的遍历
 	std::any visitBlock(MiniCParser::BlockContext * ctx) override;
 
@@ -104,6 +107,12 @@ protected:
 
 	// 非终结符LVal的分析
 	std::any visitLVal(MiniCParser::LValContext * ctx) override;
+
+	// 非终结符ArrayDims的分析
+	std::any visitArrayDims(MiniCParser::ArrayDimsContext * ctx) override;
+
+	// 非终结符InitVal的分析
+	std::any visitInitVal(MiniCParser::InitValContext * ctx) override;
 
 	// 非终结符VarDecl的分析
 	std::any visitVarDecl(MiniCParser::VarDeclContext * ctx) override;

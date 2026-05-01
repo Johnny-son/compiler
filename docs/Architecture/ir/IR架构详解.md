@@ -1179,7 +1179,9 @@ insert(inst, name)
 ```text
 value == nullptr          -> nullptr
 value 是 ConstInt         -> 原样返回
-value 是 GlobalVariable   -> builder.createLoad(value, name)
+value 是数组对象地址      -> decayArrayToPointer(value)
+value 是数组型 GlobalVariable -> decayArrayToPointer(value)
+value 是普通 GlobalVariable -> builder.createLoad(value, name)
 value 的类型是 PointerType -> builder.createLoad(value, name)
 其他情况                 -> 原样返回
 ```
@@ -1222,6 +1224,43 @@ new AllocaInst(func, type)
 
 ---
 
+## 11.4 数组辅助接口
+
+数组相关辅助接口负责把前端保留的维度和初始化列表落成 LLVM 风格 IR。
+
+```text
+getDeclDimsNode() / getDeclInitNode()
+  -> 从声明节点中取可选 AST_OP_ARRAY_DIMS 和 initVal
+
+buildArrayTypeFromDims()
+  -> 对每个维度做常量表达式求值
+  -> 由内向外构造 ArrayType
+
+buildFormalParamType()
+  -> 标量形参保持 i32
+  -> int a[] 降成 i32*
+  -> int a[][N] 降成 [N x i32]*
+
+isArrayObjectAddress()
+  -> 判断 Value 是否是数组对象地址
+
+decayArrayToPointer()
+  -> 对数组对象地址生成 getelementptr 0, 0
+  -> 用于数组作为函数实参或子数组作为实参
+
+fillArrayInitializer()
+  -> 按数组类型展开嵌套初始化列表
+  -> 缺省元素补 0
+
+emitArrayInitializerStores()
+  -> 局部数组初始化：逐元素 GEP + store
+
+buildGlobalArrayInitializer()
+  -> 全局数组初始化：生成 LLVM 聚合常量文本
+```
+
+---
+
 # 12. 典型 AST 节点翻译方式
 
 ## 12.1 编译单元
@@ -1248,6 +1287,12 @@ ir_function_define()
 ## 12.3 形参
 
 ```text
+预声明阶段：
+    buildFormalParamType(paramNode)
+    int a[]      -> i32*
+    int a[][10]  -> [10 x i32]*
+
+函数体阶段：
 for param in currentFunc->getParams():
     local = createEntryAlloca(currentFunc, param->getType(), param->getName())
     module->bindValue(param->getName(), local)
@@ -1327,6 +1372,69 @@ global->setInitializer(initValue)
 const 声明没有初始化值 -> E1304
 对 const 左值重新赋值 -> E1303
 ```
+
+## 12.7.2 数组声明和初始化
+
+数组声明节点仍然复用 `AST_OP_VAR_DECL` / `AST_OP_CONST_DECL`，但孩子中会额外带一个 `AST_OP_ARRAY_DIMS`：
+
+```text
+decl
+├── type
+├── id
+├── arrayDims
+└── initVal?
+```
+
+局部数组：
+
+```text
+type = buildArrayTypeFromDims(arrayDims, i32)
+addr = createEntryAlloca(func, type, name)
+module->bindValue(name, addr)
+如果有初始化：
+    fillArrayInitializer()
+    对每个元素：
+        elemAddr = createGEP(addr, {0, i, j, ...})
+        builder.createStore(valueOrZero, elemAddr)
+```
+
+全局数组：
+
+```text
+type = buildArrayTypeFromDims(arrayDims, i32)
+global = module->newVarValue(type, name)
+如果有初始化：
+    buildGlobalArrayInitializer() 生成聚合常量
+否则：
+    zeroinitializer
+```
+
+数组常量同样会给数组地址 `Value` 标记 `constValue`，数组元素访问生成的 GEP 会继承这个标记，因此 `const int a[2]; a[0] = 1;` 会在赋值阶段报 `E1303`。
+
+## 12.7.3 数组访问
+
+数组访问节点是 `AST_OP_ARRAY_ACCESS`，节点名保存数组名，孩子是各维下标表达式。
+
+局部或全局数组：
+
+```text
+a[i][j]
+base = lookupValue("a")
+idx0 = emitRValue(i)
+idx1 = emitRValue(j)
+addr = createGEP(base, {0, idx0, idx1})
+```
+
+函数形参数组：
+
+```text
+int f(int a[][10]) { return a[i][j]; }
+baseSlot = lookupValue("a")       // [10 x i32]** 的局部槽位
+base = load baseSlot              // [10 x i32]*
+addr = createGEP(base, {idx0, idx1})
+```
+
+读数组元素时，`emitRValue(addr)` 会继续生成 `load`。如果访问结果仍是子数组，例如 `buf[0]`，作为函数实参时会通过 `decayArrayToPointer()` 生成指向首元素的指针。
 
 ## 12.8 return
 

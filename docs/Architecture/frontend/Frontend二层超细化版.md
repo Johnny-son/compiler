@@ -23,11 +23,13 @@ CMake custom command
 - 新语法先在 `g4` 增规则，再同步 `CSTVisitor` 节点转换。
 - 对运算优先级改动必须同时验证 `relExp/eqExp/lAndExp/lOrExp/addExp/mulExp/unaryExp` 分层。
 - `if/else`、`while`、函数形参与实参列表这类成组规则，改文法时要连同 `statement/funcDef/unaryExp` 入口一起检查。
+- 数组语法需要同时覆盖声明维度、左值下标、初始化列表和函数形参数组退化；当前入口是 `arrayDims/funcArrayDims/initVal/lVal`。
 
 常见坑位：
 
 - 关键字规则顺序放在 `T_ID` 后面会被误识别为标识符。
 - 左递归/优先级写错会造成解析树结构异常。
+- `const int a;` 的错误期望会随着 `arrayDims?` 多出 `[`，错误测试需要同步预期文本。
 
 ## 2. `src/frontend/include/AttrType.h`
 
@@ -67,6 +69,7 @@ IRGenerator::run
 
 - 新语法节点要先扩 `ast_operator_type`，再补工厂函数，最后补 visitor。
 - 对 `ast_node` 字段新增尽量保持“语法字段”与“中端暂存字段”边界清晰。
+- 数组相关节点当前是 `AST_OP_ARRAY_DIMS`、`AST_OP_ARRAY_ACCESS`、`AST_OP_INIT_LIST`；函数形参数组第一维省略用 `firstArrayDimOmitted` 标记。
 
 常见坑位：
 
@@ -157,6 +160,7 @@ ASTGenerator::run
 修改建议：
 
 - 新文法规则要先在此声明 override，再在 `.cpp` 实现。
+- 数组规则新增后，需要声明 `visitArrayDims`、`visitFuncArrayDims`、`visitInitVal`，否则生成基类方法不会被项目 visitor 接住。
 
 常见坑位：
 
@@ -184,6 +188,10 @@ run
 - 新语法继续沿”文法分层 + 左结合构树”扩，关系/逻辑表达式保持与 `add/mul` 同一套路。
 - `visitCompUnit` 必须保留源码顺序，避免把全局声明和函数定义重排。
 - `visitBlockItem` 需要同时处理 `statement | varDecl | constDecl`。
+- `visitVarDecl/visitConstDecl` 中数组声明的孩子顺序固定为：类型、名字、可选 `AST_OP_ARRAY_DIMS`、可选初始化。
+- `visitLVal` 中无下标仍生成普通标识符叶子；带下标才生成 `AST_OP_ARRAY_ACCESS`。
+- `visitInitVal` 中普通表达式直接返回表达式节点，花括号初始化生成 `AST_OP_INIT_LIST`，支持空列表和嵌套列表。
+- `visitFuncFParam` 中 `int a[]` 或 `int a[][N]` 会把 `AST_OP_ARRAY_DIMS` 挂到形参节点下，第一维省略交给 IR 层降成指针。
 
 常见坑位：
 
@@ -191,6 +199,7 @@ run
 - `visitExpressionStatement` 返回 `nullptr` 表示空语句，上层插入孩子前必须判空。
 - 给新运算符补了文法却没同步 `buildLeftAssociativeBinaryTree` 的操作符映射，会生成错误 AST。
 - 把 `visitCompUnit` 写成“先收集变量、再收集函数”会破坏源码顺序。
+- 数组维度表达式在前端只保留 AST，不在 CST 阶段强行求值；是否为常量正整数由 IR 层检查。
 
 ## 9. `src/frontend/include/Graph.h`
 

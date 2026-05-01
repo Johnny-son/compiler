@@ -70,6 +70,25 @@ bool Value::isConstValue() const
 	return constValue;
 }
 
+/// @brief 记录源语言const整型值
+void Value::setConstIntValue(int32_t value)
+{
+	constIntValue = value;
+	constIntValueValid = true;
+}
+
+/// @brief 是否有源语言const整型值
+bool Value::hasConstIntValue() const
+{
+	return constIntValueValid;
+}
+
+/// @brief 获取源语言const整型值
+int32_t Value::getConstIntValue() const
+{
+	return constIntValue;
+}
+
 ///
 /// @brief 增加一条边，增加Value被使用次数
 /// @param use

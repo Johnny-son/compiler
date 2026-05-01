@@ -14,14 +14,17 @@ grammar MiniC;
 // 源文件编译单元定义
 compUnit: (funcDef | varDecl | constDecl)* EOF;
 
-// 函数定义，目前支持int返回类型和int标量形参
+// 函数定义，目前支持int返回类型和int/数组形参
 funcDef: T_INT T_ID T_L_PAREN funcFParams? T_R_PAREN block;
 
 // 函数形参列表
 funcFParams: funcFParam (T_COMMA funcFParam)*;
 
-// 函数形参，目前只支持int标量
-funcFParam: T_INT T_ID;
+// 函数形参，支持int标量和数组形参
+funcFParam: T_INT T_ID funcArrayDims?;
+
+// 函数形参数组维度，第一维按C/SysY规则省略
+funcArrayDims: T_L_BRACKET T_R_BRACKET (T_L_BRACKET expr T_R_BRACKET)*;
 
 // 语句块看用作函数体，这里允许多个语句，并且不含任何语句
 block: T_L_BRACE blockItemList? T_R_BRACE;
@@ -42,9 +45,15 @@ basicType: T_INT;
 constDecl: T_CONST basicType constDef (T_COMMA constDef)* T_SEMICOLON;
 
 // 常量定义
-constDef: T_ID T_ASSIGN expr;
+constDef: T_ID arrayDims? T_ASSIGN initVal;
 // 变量定义
-varDef: T_ID (T_ASSIGN expr)?;
+varDef: T_ID arrayDims? (T_ASSIGN initVal)?;
+
+// 数组维度
+arrayDims: (T_L_BRACKET expr T_R_BRACKET)+;
+
+// 初始化值，数组初始化时支持嵌套花括号
+initVal: expr | T_L_BRACE (initVal (T_COMMA initVal)*)? T_R_BRACE;
 
 // 语句
 statement:
@@ -97,7 +106,7 @@ primaryExp: T_L_PAREN expr T_R_PAREN | T_DIGIT | lVal;
 realParamList: expr (T_COMMA expr)*;
 
 // 左值表达式
-lVal: T_ID;
+lVal: T_ID (T_L_BRACKET expr T_R_BRACKET)*;
 
 // 用正规式来进行词法规则的描述
 
@@ -106,6 +115,8 @@ T_R_PAREN: ')';
 T_SEMICOLON: ';';
 T_L_BRACE: '{';
 T_R_BRACE: '}';
+T_L_BRACKET: '[';
+T_R_BRACKET: ']';
 
 T_ASSIGN: '=';
 T_COMMA: ',';

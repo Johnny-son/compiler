@@ -2,6 +2,9 @@
 
 #pragma once
 
+#include <string>
+#include <utility>
+
 #include "GlobalValue.h"
 
 ///
@@ -72,6 +75,36 @@ public:
 	}
 
 	///
+	/// @brief 设置LLVM文本初始化值，用于数组等聚合类型
+	/// @param text 初始化值文本
+	///
+	void setInitializerText(std::string text)
+	{
+		initializerText = std::move(text);
+		hasInitializerTextValue = true;
+		inBSSSection = (initializerText == "zeroinitializer");
+	}
+
+	///
+	/// @brief 是否带LLVM文本初始化值
+	/// @return true 已设置
+	/// @return false 未设置
+	///
+	[[nodiscard]] bool hasInitializerText() const
+	{
+		return hasInitializerTextValue;
+	}
+
+	///
+	/// @brief 获取LLVM文本初始化值
+	/// @return std::string 初始化值文本
+	///
+	[[nodiscard]] const std::string & getInitializerText() const
+	{
+		return initializerText;
+	}
+
+	///
 	/// @brief 取得变量所在的作用域层级
 	/// @return int32_t 层级
 	///
@@ -127,4 +160,14 @@ private:
 	/// @brief 整型初始化值
 	///
 	int32_t initializerInt = 0;
+
+	///
+	/// @brief 是否显式设置了LLVM文本初始化值
+	///
+	bool hasInitializerTextValue = false;
+
+	///
+	/// @brief LLVM文本初始化值，用于数组等聚合类型
+	///
+	std::string initializerText;
 };

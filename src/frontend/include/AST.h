@@ -81,6 +81,16 @@ enum class ast_operator_type : int {
 
 	// 常量声明
 	AST_OP_CONST_DECL,
+
+	// 数组维度列表
+	AST_OP_ARRAY_DIMS,
+
+	// 数组元素或子数组访问
+	AST_OP_ARRAY_ACCESS,
+
+	// 数组初始化列表
+	AST_OP_INIT_LIST,
+
 	// 二元运算符+
 	AST_OP_ADD,
 
@@ -313,4 +323,8 @@ public:
 	bool needScope = true;
 
 	// 标记该变量声明是否为常量
-	bool isConst = false;};
+	bool isConst = false;
+
+	// 标记函数形参数组是否省略了第一维
+	bool firstArrayDimOmitted = false;
+};

@@ -7,6 +7,7 @@
 #include "ir/include/Function.h"
 #include "ir/include/Type.h"
 #include "ir/include/Value.h"
+#include "ir/Types/ArrayType.h"
 #include "ir/Types/IntegerType.h"
 #include "ir/Types/PointerType.h"
 #include "ir/Values/ConstInt.h"
@@ -70,6 +71,7 @@ IRGenerator::IRGenerator(ast_node * _root, Module * _module) : root(_root), modu
 	ast2ir_handlers[ast_operator_type::AST_OP_LEAF_LITERAL_UINT] = &IRGenerator::ir_leaf_node_uint;
 	ast2ir_handlers[ast_operator_type::AST_OP_LEAF_VAR_ID] = &IRGenerator::ir_leaf_node_var_id;
 	ast2ir_handlers[ast_operator_type::AST_OP_LEAF_TYPE] = &IRGenerator::ir_leaf_node_type;
+	ast2ir_handlers[ast_operator_type::AST_OP_ARRAY_ACCESS] = &IRGenerator::ir_array_access;
 
 	/* 表达式运算， 加减 */
 	ast2ir_handlers[ast_operator_type::AST_OP_SUB] = &IRGenerator::ir_sub;
@@ -299,7 +301,20 @@ bool IRGenerator::predeclare_function(ast_node * node)
 			return false;
 		}
 
-		formalParams.push_back(new FormalParam(param->type, param->name));
+		Type * paramType = buildFormalParamType(param);
+		if (paramType == nullptr) {
+			report_ir_error(
+				"E1113",
+				param != nullptr ? param->line_no : (name_node != nullptr ? name_node->line_no : -1),
+				"参数检查",
+				"函数(%s)形参(%s)数组维度非法",
+				name_node->name.c_str(),
+				param != nullptr ? param->name.c_str() : "<null>");
+			return false;
+		}
+
+		param->type = paramType;
+		formalParams.push_back(new FormalParam(paramType, param->name));
 	}
 
 	if (module->newFunction(name_node->name, type_node->type, formalParams) == nullptr) {
@@ -482,6 +497,55 @@ bool IRGenerator::ir_leaf_node_var_id(ast_node * node)
 	return true;
 }
 
+// 数组访问节点翻译成MiniLLVM IR，结果保持为左值地址
+bool IRGenerator::ir_array_access(ast_node * node)
+{
+	Value * base = module->lookupValue(node->name);
+	if (base == nullptr) {
+		report_ir_error(
+			"E1010",
+			node != nullptr ? node->line_no : -1,
+			"符号检查",
+			"标识符(%s)未定义",
+			node != nullptr ? node->name.c_str() : "<null>");
+		return false;
+	}
+
+	Value * gepBase = base;
+	bool needLeadingZero = false;
+	if (auto * alloca = dynamic_cast<AllocaInst *>(base); alloca != nullptr) {
+		if (alloca->getAllocatedType()->isArrayType()) {
+			needLeadingZero = true;
+		} else if (alloca->getAllocatedType()->isPointerType()) {
+			gepBase = builder.createLoad(base, node->name + ".base");
+		}
+	} else if (auto * global = dynamic_cast<GlobalVariable *>(base); global != nullptr) {
+		needLeadingZero = global->getType()->isArrayType();
+	}
+
+	std::vector<Value *> indices;
+	if (needLeadingZero) {
+		indices.push_back(module->newConstInt(0));
+	}
+
+	for (auto * indexExpr: node->sons) {
+		ast_node * indexNode = ir_visit_ast_node(indexExpr);
+		if (indexNode == nullptr) {
+			return false;
+		}
+		indices.push_back(emitRValue(indexNode->val, "idx"));
+	}
+
+	node->val = builder.createGEP(gepBase, indices, node->name + ".idx");
+	if (node->val == nullptr) {
+		report_ir_error("E1307", node != nullptr ? node->line_no : -1, "数组访问", "数组(%s)寻址失败", node->name.c_str());
+		return false;
+	}
+	node->val->setConstValue(base->isConstValue());
+
+	return true;
+}
+
 Value * IRGenerator::emitRValue(Value * value, const std::string & name)
 {
 	if (value == nullptr) {
@@ -492,7 +556,18 @@ Value * IRGenerator::emitRValue(Value * value, const std::string & name)
 		return value;
 	}
 
-	if (dynamic_cast<GlobalVariable *>(value) != nullptr || dynamic_cast<PointerType *>(value->getType()) != nullptr) {
+	if (isArrayObjectAddress(value)) {
+		return decayArrayToPointer(value, name.empty() ? "arraydecay" : name);
+	}
+
+	if (auto * global = dynamic_cast<GlobalVariable *>(value); global != nullptr) {
+		if (global->getType()->isArrayType()) {
+			return decayArrayToPointer(value, name.empty() ? "arraydecay" : name);
+		}
+		return builder.createLoad(value, name);
+	}
+
+	if (dynamic_cast<PointerType *>(value->getType()) != nullptr) {
 		return builder.createLoad(value, name);
 	}
 
@@ -533,6 +608,283 @@ AllocaInst * IRGenerator::createEntryAlloca(Function * func, Type * type, const 
 	}
 	instructions.insert(insertPos, alloca);
 	return alloca;
+}
+
+ast_node * IRGenerator::getDeclDimsNode(ast_node * node) const
+{
+	if (node == nullptr || node->sons.size() < 3) {
+		return nullptr;
+	}
+	return node->sons[2]->node_type == ast_operator_type::AST_OP_ARRAY_DIMS ? node->sons[2] : nullptr;
+}
+
+ast_node * IRGenerator::getDeclInitNode(ast_node * node) const
+{
+	if (node == nullptr || node->sons.size() < 3) {
+		return nullptr;
+	}
+
+	ast_node * dimsNode = getDeclDimsNode(node);
+	size_t initIndex = dimsNode != nullptr ? 3 : 2;
+	return node->sons.size() > initIndex ? node->sons[initIndex] : nullptr;
+}
+
+Type * IRGenerator::buildArrayType(Type * baseType, const std::vector<int32_t> & dims) const
+{
+	Type * type = baseType;
+	for (auto iter = dims.rbegin(); iter != dims.rend(); ++iter) {
+		type = new ArrayType(type, *iter);
+	}
+	return type;
+}
+
+bool IRGenerator::buildArrayTypeFromDims(
+	ast_node * dimsNode, Type * baseType, Type *& resultType, std::vector<int32_t> * dims)
+{
+	resultType = baseType;
+	if (dimsNode == nullptr) {
+		return true;
+	}
+
+	std::vector<int32_t> dimValues;
+	dimValues.reserve(dimsNode->sons.size());
+	for (auto * dimNode: dimsNode->sons) {
+		int32_t dimValue = 0;
+		if (!eval_global_const_expr(dimNode, dimValue) || dimValue <= 0) {
+			report_ir_error(
+				"E1306",
+				dimNode != nullptr ? dimNode->line_no : (dimsNode != nullptr ? dimsNode->line_no : -1),
+				"数组声明",
+				"数组维度必须是正整数常量表达式");
+			return false;
+		}
+		dimValues.push_back(dimValue);
+	}
+
+	resultType = buildArrayType(baseType, dimValues);
+	if (dims != nullptr) {
+		*dims = dimValues;
+	}
+	return true;
+}
+
+Type * IRGenerator::buildFormalParamType(ast_node * paramNode)
+{
+	if (paramNode == nullptr) {
+		return nullptr;
+	}
+
+	ast_node * dimsNode = nullptr;
+	if (!paramNode->sons.empty() && paramNode->sons[0]->node_type == ast_operator_type::AST_OP_ARRAY_DIMS) {
+		dimsNode = paramNode->sons[0];
+	}
+
+	if (dimsNode == nullptr) {
+		return paramNode->type;
+	}
+
+	Type * pointeeType = paramNode->type;
+	if (!dimsNode->sons.empty()) {
+		Type * arrayType = nullptr;
+		if (!buildArrayTypeFromDims(dimsNode, paramNode->type, arrayType)) {
+			return nullptr;
+		}
+		pointeeType = arrayType;
+	}
+
+	return const_cast<PointerType *>(PointerType::get(pointeeType));
+}
+
+bool IRGenerator::isArrayObjectAddress(Value * value) const
+{
+	if (value == nullptr) {
+		return false;
+	}
+
+	if (auto * global = dynamic_cast<GlobalVariable *>(value); global != nullptr) {
+		return global->getType()->isArrayType();
+	}
+
+	if (auto * alloca = dynamic_cast<AllocaInst *>(value); alloca != nullptr) {
+		return alloca->getAllocatedType() != nullptr && alloca->getAllocatedType()->isArrayType();
+	}
+
+	auto * ptrType = dynamic_cast<PointerType *>(value->getType());
+	return ptrType != nullptr && ptrType->getPointeeType() != nullptr && ptrType->getPointeeType()->isArrayType();
+}
+
+Value * IRGenerator::decayArrayToPointer(Value * value, const std::string & name)
+{
+	if (value == nullptr) {
+		return nullptr;
+	}
+
+	auto * zero = module->newConstInt(0);
+	return builder.createGEP(value, {zero, zero}, name.empty() ? "arraydecay" : name);
+}
+
+size_t IRGenerator::getFlattenElementCount(Type * type) const
+{
+	if (auto * arrayType = dynamic_cast<ArrayType *>(type); arrayType != nullptr) {
+		return static_cast<size_t>(arrayType->getElementCount()) * getFlattenElementCount(arrayType->getElementType());
+	}
+	return 1;
+}
+
+std::vector<int32_t> IRGenerator::getArrayDimensions(Type * arrayType) const
+{
+	std::vector<int32_t> dims;
+	Type * current = arrayType;
+	while (auto * currentArray = dynamic_cast<ArrayType *>(current)) {
+		dims.push_back(currentArray->getElementCount());
+		current = currentArray->getElementType();
+	}
+	return dims;
+}
+
+std::vector<int32_t> IRGenerator::flattenIndexToIndices(size_t flatIndex, const std::vector<int32_t> & dims) const
+{
+	std::vector<int32_t> indices(dims.size(), 0);
+	for (size_t index = dims.size(); index > 0; --index) {
+		int32_t dim = dims[index - 1];
+		indices[index - 1] = static_cast<int32_t>(flatIndex % static_cast<size_t>(dim));
+		flatIndex /= static_cast<size_t>(dim);
+	}
+	return indices;
+}
+
+bool IRGenerator::fillArrayInitializer(ast_node * initNode, Type * type, std::vector<ast_node *> & slots, size_t baseIndex)
+{
+	if (initNode == nullptr) {
+		return true;
+	}
+
+	auto * arrayType = dynamic_cast<ArrayType *>(type);
+	if (arrayType == nullptr) {
+		if (initNode->node_type == ast_operator_type::AST_OP_INIT_LIST) {
+			if (!initNode->sons.empty()) {
+				slots[baseIndex] = initNode->sons[0];
+			}
+		} else {
+			slots[baseIndex] = initNode;
+		}
+		return true;
+	}
+
+	if (initNode->node_type != ast_operator_type::AST_OP_INIT_LIST) {
+		slots[baseIndex] = initNode;
+		return true;
+	}
+
+	Type * elementType = arrayType->getElementType();
+	const size_t elementSize = getFlattenElementCount(elementType);
+	const size_t totalSize = getFlattenElementCount(arrayType);
+	size_t offset = 0;
+
+	for (auto * child: initNode->sons) {
+		if (offset >= totalSize) {
+			break;
+		}
+
+		if (child->node_type == ast_operator_type::AST_OP_INIT_LIST) {
+			if (!fillArrayInitializer(child, elementType, slots, baseIndex + offset)) {
+				return false;
+			}
+			offset += elementSize;
+		} else {
+			slots[baseIndex + offset] = child;
+			++offset;
+		}
+	}
+
+	return true;
+}
+
+bool IRGenerator::emitArrayInitializerStores(Value * arrayAddr, Type * arrayType, ast_node * initNode)
+{
+	const size_t total = getFlattenElementCount(arrayType);
+	std::vector<ast_node *> slots(total, nullptr);
+	if (!fillArrayInitializer(initNode, arrayType, slots, 0)) {
+		return false;
+	}
+
+	std::vector<int32_t> dims = getArrayDimensions(arrayType);
+	for (size_t flatIndex = 0; flatIndex < total; ++flatIndex) {
+		std::vector<Value *> indices;
+		indices.push_back(module->newConstInt(0));
+		for (int32_t index: flattenIndexToIndices(flatIndex, dims)) {
+			indices.push_back(module->newConstInt(index));
+		}
+
+		Value * elemAddr = builder.createGEP(arrayAddr, indices, "arrayinit.gep");
+		if (elemAddr == nullptr) {
+			return false;
+		}
+
+		Value * initValue = module->newConstInt(0);
+		if (slots[flatIndex] != nullptr) {
+			ast_node * initAst = ir_visit_ast_node(slots[flatIndex]);
+			if (initAst == nullptr) {
+				return false;
+			}
+			initValue = emitRValue(initAst->val, "arrayinit");
+		}
+
+		builder.createStore(initValue, elemAddr);
+	}
+
+	return true;
+}
+
+bool IRGenerator::buildGlobalArrayInitializer(Type * arrayType, ast_node * initNode, std::string & initializerText)
+{
+	if (initNode == nullptr) {
+		initializerText = "zeroinitializer";
+		return true;
+	}
+
+	const size_t total = getFlattenElementCount(arrayType);
+	std::vector<ast_node *> slots(total, nullptr);
+	if (!fillArrayInitializer(initNode, arrayType, slots, 0)) {
+		return false;
+	}
+
+	std::vector<int32_t> values(total, 0);
+	for (size_t index = 0; index < total; ++index) {
+		if (slots[index] == nullptr) {
+			continue;
+		}
+		if (!eval_global_const_expr(slots[index], values[index])) {
+			report_ir_error(
+				"E1301",
+				slots[index] != nullptr ? slots[index]->line_no : -1,
+				"全局初始化",
+				"全局数组初始化目前只支持常量整数表达式");
+			return false;
+		}
+	}
+
+	std::vector<int32_t> dims = getArrayDimensions(arrayType);
+	size_t cursor = 0;
+	auto emitAggregate = [&](auto && self, Type * currentType, bool includeType) -> std::string {
+		if (auto * currentArray = dynamic_cast<ArrayType *>(currentType); currentArray != nullptr) {
+			std::string text = includeType ? currentArray->toString() + " [" : "[";
+			for (int32_t index = 0; index < currentArray->getElementCount(); ++index) {
+				if (index != 0) {
+					text += ", ";
+				}
+				text += self(self, currentArray->getElementType(), true);
+			}
+			text += "]";
+			return text;
+		}
+
+		int32_t value = cursor < values.size() ? values[cursor++] : 0;
+		return includeType ? currentType->toString() + " " + std::to_string(value) : std::to_string(value);
+	};
+
+	initializerText = emitAggregate(emitAggregate, arrayType, false);
+	return true;
 }
 
 bool IRGenerator::ir_binary(ast_node * node, BinaryEmitOp op)
@@ -947,28 +1299,21 @@ bool IRGenerator::ir_variable_declare(ast_node * node)
 		return false;
 	}
 
+	ast_node * dimsNode = getDeclDimsNode(node);
+	ast_node * initExpr = getDeclInitNode(node);
+	Type * declaredType = node->sons[0]->type;
+	std::vector<int32_t> arrayDims;
+	if (dimsNode != nullptr && !buildArrayTypeFromDims(dimsNode, node->sons[0]->type, declaredType, &arrayDims)) {
+		return false;
+	}
+	node->type = declaredType;
+
 	if (module->getCurrentFunction() == nullptr) {
-		node->val = module->newVarValue(node->sons[0]->type, node->sons[1]->name, node->sons[1]->line_no);
+		node->val = module->newVarValue(declaredType, node->sons[1]->name, node->sons[1]->line_no);
 		if (node->val == nullptr) {
 			return false;
 		}
 		node->val->setConstValue(node->isConst);
-
-		if (node->sons.size() < 3) {
-			return true;
-		}
-
-		ast_node * init_expr = node->sons[2];
-		int32_t init_value = 0;
-		if (!eval_global_const_expr(init_expr, init_value)) {
-			report_ir_error(
-				"E1301",
-				node->sons[1] != nullptr ? node->sons[1]->line_no : -1,
-				"全局初始化",
-				"全局变量(%s)初始化目前只支持常量整数表达式",
-				node->sons[1]->name.c_str());
-			return false;
-		}
 
 		auto * global_var = dynamic_cast<GlobalVariable *>(node->val);
 		if (global_var == nullptr) {
@@ -981,28 +1326,65 @@ bool IRGenerator::ir_variable_declare(ast_node * node)
 			return false;
 		}
 
+		if (dimsNode != nullptr) {
+			std::string initializerText;
+			if (!buildGlobalArrayInitializer(declaredType, initExpr, initializerText)) {
+				return false;
+			}
+			global_var->setInitializerText(initializerText);
+			return true;
+		}
+
+		if (initExpr == nullptr) {
+			return true;
+		}
+
+		int32_t init_value = 0;
+		if (!eval_global_const_expr(initExpr, init_value)) {
+			report_ir_error(
+				"E1301",
+				node->sons[1] != nullptr ? node->sons[1]->line_no : -1,
+				"全局初始化",
+				"全局变量(%s)初始化目前只支持常量整数表达式",
+				node->sons[1]->name.c_str());
+			return false;
+		}
+
 		global_var->setInitializer(init_value);
+		if (node->isConst) {
+			node->val->setConstIntValue(init_value);
+		}
 		return true;
 	}
 
-	AllocaInst * alloca = createEntryAlloca(module->getCurrentFunction(), node->sons[0]->type, node->sons[1]->name);
+	AllocaInst * alloca = createEntryAlloca(module->getCurrentFunction(), declaredType, node->sons[1]->name);
 	if (alloca == nullptr || !module->bindValue(node->sons[1]->name, alloca, node->sons[1]->line_no)) {
 		return false;
 	}
 	node->val = alloca;
 	node->val->setConstValue(node->isConst);
 
-	if (node->sons.size() < 3) {
+	if (initExpr == nullptr) {
 		return true;
 	}
 
-	ast_node * init_expr = node->sons[2];
-	ast_node * init_node = ir_visit_ast_node(init_expr);
+	if (dimsNode != nullptr) {
+		return emitArrayInitializerStores(node->val, declaredType, initExpr);
+	}
+
+	ast_node * init_node = ir_visit_ast_node(initExpr);
 	if (!init_node) {
 		return false;
 	}
 
-	builder.createStore(emitRValue(init_node->val, "inittmp"), node->val);
+	Value * initValue = emitRValue(init_node->val, "inittmp");
+	builder.createStore(initValue, node->val);
+	if (node->isConst) {
+		int32_t constValue = 0;
+		if (eval_global_const_expr(initExpr, constValue)) {
+			node->val->setConstIntValue(constValue);
+		}
+	}
 
 	return true;
 }
@@ -1027,6 +1409,22 @@ bool IRGenerator::eval_global_const_expr(ast_node * node, int32_t & value)
 		case ast_operator_type::AST_OP_LEAF_LITERAL_UINT:
 			value = static_cast<int32_t>(node->integer_val);
 			return true;
+
+		case ast_operator_type::AST_OP_LEAF_VAR_ID: {
+			Value * constValue = module->lookupValue(node->name);
+			if (constValue == nullptr || !constValue->isConstValue() || !constValue->hasConstIntValue()) {
+				return false;
+			}
+			value = constValue->getConstIntValue();
+			return true;
+		}
+
+		case ast_operator_type::AST_OP_INIT_LIST:
+			if (node->sons.empty()) {
+				value = 0;
+				return true;
+			}
+			return eval_global_const_expr(node->sons[0], value);
 
 		case ast_operator_type::AST_OP_NOT: {
 			if (node->sons.size() != 1) {
