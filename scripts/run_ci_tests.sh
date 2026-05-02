@@ -11,6 +11,7 @@ DEFAULT_TEST_PLAN_FILE="${SCRIPT_DIR}/ci_test_plan.txt"
 MODE=""
 RUN_ALL=0
 SHOW_FAILURES=0
+WITH_PERF=0
 COMPILER_BIN="${COMPILER_BIN:-}"
 TEST_PLAN_FILE="${TEST_PLAN_FILE:-${DEFAULT_TEST_PLAN_FILE}}"
 MINIC_EXTRA_ARGS="${MINIC_EXTRA_ARGS:-}"
@@ -30,6 +31,7 @@ declare -a PLAN_AST_TARGETS=()
 declare -a PLAN_IR_TARGETS=()
 declare -a PLAN_ASM_TARGETS=()
 declare -a PLAN_ERR_TARGETS=()
+declare -a PLAN_PERF_TARGETS=()
 
 SUITE_OK_COUNT=0
 SUITE_NG_COUNT=0
@@ -46,8 +48,8 @@ USE_COLOR=0
 show_usage() {
   cat <<'EOF'
 Usage:
-  scripts/run_ci_tests.sh <-ast|-ir|-asm|-err> [--show-failures] [--compiler <path>] <target> [target...]
-  scripts/run_ci_tests.sh [<-ast|-ir|-asm|-err>] --all [--show-failures] [--compiler <path>] [--test-plan <path>]
+  scripts/run_ci_tests.sh <-ast|-ir|-asm|-err|-perf> [--show-failures] [--compiler <path>] <target> [target...]
+  scripts/run_ci_tests.sh [<-ast|-ir|-asm|-err|-perf>] --all [--show-failures] [--compiler <path>] [--test-plan <path>]
 
 Targets:
   2023_function
@@ -60,7 +62,9 @@ Options:
   -ir                 Test LLVM IR generation, local link, run and diff
   -asm                Test RISCV64 assembly generation and execution
   -err                Test diagnostic (error) output matching
+  -perf               Test performance cases through LLVM IR path
   --all               Run tests listed in the test plan file
+  --with-perf         Include perf section when running --all locally
   --test-plan <path>  Override the default test plan file
   --compiler <path>   Override compiler binary path
   --show-failures     Print failed case names after summary
@@ -70,8 +74,10 @@ Examples:
   scripts/run_ci_tests.sh -ir 2023_function
   scripts/run_ci_tests.sh -ast 2023_func_00_main.c
   scripts/run_ci_tests.sh -asm 2023_func_01_var_defn2.c 2023_func_02_var_defn3.c --show-failures
+  scripts/run_ci_tests.sh -perf 2025_performance --compiler ./build/compiler
   scripts/run_ci_tests.sh -err test/stage1_params/param_redeclare_local.c
   scripts/run_ci_tests.sh --all
+  scripts/run_ci_tests.sh --all --with-perf --compiler ./build/compiler
   scripts/run_ci_tests.sh --all --compiler ./build/compiler
 EOF
 }
@@ -113,6 +119,7 @@ suite_title() {
     ir) printf 'ir tests:' ;;
     asm) printf 'asm tests:' ;;
     err) printf 'err tests:' ;;
+    perf) printf 'perf tests:' ;;
     *) printf '%s tests:' "$1" ;;
   esac
 }
@@ -123,6 +130,7 @@ mode_label() {
     ir) printf 'IR\n' ;;
     asm) printf 'ASM\n' ;;
     err) printf 'ERR\n' ;;
+    perf) printf 'PERF\n' ;;
     *) printf '%s\n' "$1" ;;
   esac
 }
@@ -137,7 +145,7 @@ trim_line() {
 set_mode() {
   local new_mode="$1"
   if [[ -n "${MODE}" && "${MODE}" != "${new_mode}" ]]; then
-    echo "Only one of -ast, -ir, -asm, -err can be specified." >&2
+    echo "Only one of -ast, -ir, -asm, -err, -perf can be specified." >&2
     exit 1
   fi
   MODE="${new_mode}"
@@ -247,6 +255,13 @@ infer_case_dir() {
 
 resolve_case_token() {
   local token="$1"
+  local original_token="$token"
+  local optional=0
+  if [[ "${token}" == \?* ]]; then
+    optional=1
+    token="${token#?}"
+  fi
+
   local normalized="${token%/}"
   local case_name=""
   local dir_path=""
@@ -310,12 +325,16 @@ EOF
       return
     fi
 
-    echo "Ambiguous test case token: ${token}" >&2
+    echo "Ambiguous test case token: ${original_token}" >&2
     echo "${matches}" >&2
     exit 1
   fi
 
-  echo "Cannot resolve test target: ${token}" >&2
+  if [[ ${optional} -eq 1 ]]; then
+    return 0
+  fi
+
+  echo "Cannot resolve test target: ${original_token}" >&2
   exit 1
 }
 
@@ -465,6 +484,7 @@ append_plan_target() {
     ir) PLAN_IR_TARGETS+=("${token}") ;;
     asm) PLAN_ASM_TARGETS+=("${token}") ;;
     err) PLAN_ERR_TARGETS+=("${token}") ;;
+    perf) PLAN_PERF_TARGETS+=("${token}") ;;
     *)
       echo "Unknown test plan section: ${section}" >&2
       exit 1
@@ -486,6 +506,7 @@ load_test_plan() {
   PLAN_IR_TARGETS=()
   PLAN_ASM_TARGETS=()
   PLAN_ERR_TARGETS=()
+  PLAN_PERF_TARGETS=()
 
   while IFS= read -r raw_line || [[ -n "${raw_line}" ]]; do
     line="$(trim_line "${raw_line}")"
@@ -494,7 +515,7 @@ load_test_plan() {
       continue
     fi
 
-    if [[ "${line}" =~ ^(ast|ir|asm|err)[[:space:]]*:$ ]]; then
+    if [[ "${line}" =~ ^(ast|ir|asm|err|perf)[[:space:]]*:$ ]]; then
       current_section="${BASH_REMATCH[1]}"
       continue
     fi
@@ -507,7 +528,7 @@ load_test_plan() {
     append_plan_target "${current_section}" "${line}"
   done < "${TEST_PLAN_FILE}"
 
-  if [[ ${#PLAN_AST_TARGETS[@]} -eq 0 && ${#PLAN_IR_TARGETS[@]} -eq 0 && ${#PLAN_ASM_TARGETS[@]} -eq 0 && ${#PLAN_ERR_TARGETS[@]} -eq 0 ]]; then
+  if [[ ${#PLAN_AST_TARGETS[@]} -eq 0 && ${#PLAN_IR_TARGETS[@]} -eq 0 && ${#PLAN_ASM_TARGETS[@]} -eq 0 && ${#PLAN_ERR_TARGETS[@]} -eq 0 && ${#PLAN_PERF_TARGETS[@]} -eq 0 ]]; then
     echo "No test targets found in plan file: ${TEST_PLAN_FILE}" >&2
     exit 1
   fi
@@ -569,6 +590,10 @@ run_err_suite() {
   done
 
   if [[ ${#CASES[@]} -eq 0 ]]; then
+    if [[ "${suite_mode}" == "perf" ]]; then
+      echo "no local performance tests found"
+      return
+    fi
     echo "No test cases resolved for $(mode_label "${suite_mode}")." >&2
     exit 1
   fi
@@ -807,7 +832,7 @@ run_mode_suite() {
 
   case "${suite_mode}" in
     asm) setup_asm_tools ;;
-    ir) setup_ir_tools ;;
+    ir|perf) setup_ir_tools ;;
   esac
 
   for case_file in "$@"; do
@@ -829,7 +854,7 @@ run_mode_suite() {
 
     case "${suite_mode}" in
       asm) artifact_file="${workdir}/${case_name}.s" ;;
-      ir) artifact_file="${workdir}/${case_name}.ll" ;;
+      ir|perf) artifact_file="${workdir}/${case_name}.ll" ;;
       ast) artifact_file="${workdir}/${case_name}.png" ;;
     esac
 
@@ -842,7 +867,7 @@ run_mode_suite() {
       asm)
         compiler_cmd+=(-t "${MINIC_TARGET}")
         ;;
-      ir)
+      ir|perf)
         compiler_cmd+=(-L)
         ;;
       ast)
@@ -885,8 +910,13 @@ run_mode_suite() {
     bin_file="${workdir}/${case_name}"
     result_file="${workdir}/${case_name}.result"
 
-    if [[ "${suite_mode}" == "ir" ]]; then
-      if ! run_logged_command "${LLVM_CC}" -o "${bin_file}" "${artifact_file}" "${RUNTIME_LIB}"; then
+    if [[ "${suite_mode}" == "ir" || "${suite_mode}" == "perf" ]]; then
+      llvm_link_cmd=("${LLVM_CC}" -o "${bin_file}")
+      if [[ "${suite_mode}" == "perf" ]]; then
+        llvm_link_cmd+=(-DOPT_TEST)
+      fi
+      llvm_link_cmd+=("${artifact_file}" "${RUNTIME_LIB}")
+      if ! run_logged_command "${llvm_link_cmd[@]}"; then
         print_case_failure "${case_name}" "link failed"
         record_failure "${case_name}" "LLVM IR link failed"
         SUITE_NG_COUNT=$((SUITE_NG_COUNT + 1))
@@ -977,6 +1007,7 @@ run_plan_section() {
     ir) suite_targets=("${PLAN_IR_TARGETS[@]}") ;;
     asm) suite_targets=("${PLAN_ASM_TARGETS[@]}") ;;
     err) suite_targets=("${PLAN_ERR_TARGETS[@]}") ;;
+    perf) suite_targets=("${PLAN_PERF_TARGETS[@]}") ;;
   esac
 
   printf '%s\n' "$(suite_title "${suite_mode}")"
@@ -1033,8 +1064,14 @@ while [[ $# -gt 0 ]]; do
     -err)
       set_mode err
       ;;
+    -perf)
+      set_mode perf
+      ;;
     --all)
       RUN_ALL=1
+      ;;
+    --with-perf)
+      WITH_PERF=1
       ;;
     --test-plan)
       shift
@@ -1089,7 +1126,7 @@ fi
 
 if [[ ${RUN_ALL} -eq 0 ]]; then
   if [[ -z "${MODE}" ]]; then
-    echo "You must specify one of -ast, -ir, -asm, -err." >&2
+    echo "You must specify one of -ast, -ir, -asm, -err, -perf." >&2
     exit 1
   fi
 
@@ -1117,6 +1154,15 @@ if [[ ${RUN_ALL} -eq 1 ]]; then
     run_plan_section ir
     run_plan_section asm
     run_plan_section err
+    if [[ ${WITH_PERF} -eq 1 ]]; then
+      run_plan_section perf
+    else
+      printf '%s\n' "$(suite_title perf)"
+      echo "skipped (use --with-perf for local performance tests)"
+      printf '%s number=%d, %s number=%d\n\n' \
+        "$(green_text "OK")" 0 \
+        "$(red_text "NG")" 0
+    fi
   fi
 
   if [[ ${TOTAL_NG_COUNT} -ne 0 ]]; then

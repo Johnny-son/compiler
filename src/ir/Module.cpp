@@ -96,6 +96,8 @@ Module::Module(std::string _name) : name(_name)
 		VoidType::getType(),
 		{new FormalParam{IntegerType::getTypeInt(), ""}, new FormalParam{floatPtrType, ""}},
 		true);
+	(void) newFunction("_sysy_starttime", VoidType::getType(), {new FormalParam{IntegerType::getTypeInt(), ""}}, true);
+	(void) newFunction("_sysy_stoptime", VoidType::getType(), {new FormalParam{IntegerType::getTypeInt(), ""}}, true);
 }
 
 /// @brief 进入作用域，如进入函数体块、语句块等

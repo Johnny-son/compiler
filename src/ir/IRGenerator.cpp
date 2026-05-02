@@ -1956,6 +1956,14 @@ bool IRGenerator::ir_function_call(ast_node * node)
 
 	std::string funcName = node->sons[0]->name;
 	int64_t lineno = node->sons[0]->line_no;
+	bool isTimingMacroCall = false;
+	if (funcName == "starttime") {
+		funcName = "_sysy_starttime";
+		isTimingMacroCall = true;
+	} else if (funcName == "stoptime") {
+		funcName = "_sysy_stoptime";
+		isTimingMacroCall = true;
+	}
 
 	// 获取当前正在处理的函数
 	Function * currentFunc = module->getCurrentFunction();
@@ -1978,7 +1986,11 @@ bool IRGenerator::ir_function_call(ast_node * node)
 	}
 
 	auto & formalParams = calledFunction->getParams();
-	if (paramsNode->sons.size() != formalParams.size()) {
+	size_t actualParamCount = paramsNode->sons.size();
+	if (isTimingMacroCall) {
+		actualParamCount = 1;
+	}
+	if (actualParamCount != formalParams.size()) {
 		report_ir_error(
 			"E1201",
 			lineno,
@@ -1986,12 +1998,16 @@ bool IRGenerator::ir_function_call(ast_node * node)
 			"函数(%s)调用参数个数不匹配，期望%zu个，实际%zu个",
 			funcName.c_str(),
 			formalParams.size(),
-			paramsNode->sons.size());
+			actualParamCount);
 		return false;
 	}
 
+	if (isTimingMacroCall) {
+		realParams.push_back(module->newConstInt(static_cast<int32_t>(lineno)));
+	}
+
 	// 如果没有孩子，也认为是没有参数
-	if (!paramsNode->sons.empty()) {
+	if (!isTimingMacroCall && !paramsNode->sons.empty()) {
 
 		int32_t argsCount = (int32_t) paramsNode->sons.size();
 
@@ -2015,6 +2031,18 @@ bool IRGenerator::ir_function_call(ast_node * node)
 			Value * realValue = emitRValue(temp->val, "arg");
 			Type * realType = realValue != nullptr ? realValue->getType() : nullptr;
 			Type * formalType = formalParams[index]->getType();
+			if (realValue != nullptr && formalType != nullptr && formalType->isPointerType() &&
+				realType != nullptr && realType->isPointerType()) {
+				auto * realPtrType = dynamic_cast<PointerType *>(realType);
+				auto * formalPtrType = dynamic_cast<PointerType *>(formalType);
+				if (realPtrType != nullptr && formalPtrType != nullptr &&
+					realPtrType->getPointeeType() != nullptr && formalPtrType->getPointeeType() != nullptr &&
+					realPtrType->getPointeeType()->isArrayType() &&
+					!formalPtrType->getPointeeType()->isArrayType()) {
+					realValue = decayArrayToPointer(realValue, "argdecay");
+					realType = realValue != nullptr ? realValue->getType() : nullptr;
+				}
+			}
 			if (realType != nullptr && formalType != nullptr && (formalType->isFloatType() || formalType->isInt32Type())) {
 				realValue = convertValueToType(realValue, formalType, "argcast");
 				realType = realValue != nullptr ? realValue->getType() : nullptr;

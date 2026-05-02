@@ -61,3 +61,10 @@ test/stage1_params/param_global_init_nonconst.c
 test/stage1_params/param_duplicate.c
 test/stage1_params/change_const_var.c
 test/stage1_params/const_not_init.c
+
+perf:
+# Local only. The 2025 performance inputs are too large for GitHub CI.
+# `bash scripts/run_ci_tests.sh --all` skips this section by default.
+# Use `bash scripts/run_ci_tests.sh --all --with-perf --compiler ./build/compiler`
+# or `bash scripts/run_ci_tests.sh -perf 2025_performance --compiler ./build/compiler` locally.
+?2025_performance
