@@ -22,7 +22,8 @@ CMake custom command
 
 - 新语法先在 `g4` 增规则，再同步 `CSTVisitor` 节点转换。
 - 对运算优先级改动必须同时验证 `relExp/eqExp/lAndExp/lOrExp/addExp/mulExp/unaryExp` 分层。
-- `if/else`、`while`、函数形参与实参列表这类成组规则，改文法时要连同 `statement/funcDef/unaryExp` 入口一起检查。
+- `if/else`、`while`、`for`、函数形参与实参列表这类成组规则，改文法时要连同 `statement/funcDef/unaryExp` 入口一起检查。
+- `for` 语法当前入口是 `forInit/forStep`，初始化和步进部分支持赋值或普通表达式，条件缺省时由 CSTVisitor 补成常量真。
 - 数组语法需要同时覆盖声明维度、左值下标、初始化列表和函数形参数组退化；当前入口是 `arrayDims/funcArrayDims/initVal/lVal`。
 - 基本类型扩展时要区分 `funcType` 和 `basicType`：函数返回允许 `void`，变量、常量和形参不允许 `void`。
 - 浮点常量需要覆盖普通小数、科学计数法和十六进制浮点形式，词法规则必须放在整数字面量规则之前。
@@ -74,6 +75,7 @@ IRGenerator::run
 - 对 `ast_node` 字段新增尽量保持“语法字段”与“中端暂存字段”边界清晰。
 - 数组相关节点当前是 `AST_OP_ARRAY_DIMS`、`AST_OP_ARRAY_ACCESS`、`AST_OP_INIT_LIST`；函数形参数组第一维省略用 `firstArrayDimOmitted` 标记。
 - 浮点字面量使用 `AST_OP_LEAF_LITERAL_FLOAT`，节点类型设置为 `FloatType`。
+- `AST_OP_FOR` 的孩子顺序固定为：初始化、条件、步进、循环体；缺省初始化和步进用不引入作用域的空 block 占位。
 
 常见坑位：
 
@@ -183,7 +185,7 @@ run
      -> visitVarDecl / visitConstDecl / visitFuncDef
         -> visitFuncFParams / visitBlock
            -> visitBlockItemList -> visitStatement
-              -> visitIfStatement / visitWhileStatement / visitBreakStatement / visitContinueStatement
+              -> visitIfStatement / visitWhileStatement / visitForStatement / visitBreakStatement / visitContinueStatement
               -> visitExpr -> visitLOrExp -> visitLAndExp -> visitEqExp -> visitRelExp
                  -> visitAddExp -> visitMulExp -> visitUnaryExp -> visitPrimaryExp
 ```
@@ -198,11 +200,13 @@ run
 - `visitLVal` 中无下标仍生成普通标识符叶子；带下标才生成 `AST_OP_ARRAY_ACCESS`。
 - `visitInitVal` 中普通表达式直接返回表达式节点，花括号初始化生成 `AST_OP_INIT_LIST`，支持空列表和嵌套列表。
 - `visitFuncFParam` 中 `int a[]`、`float a[]` 或多维数组形参会把 `AST_OP_ARRAY_DIMS` 挂到形参节点下，第一维省略交给 IR 层降成指针。
+- `visitForStatement` 会把缺省条件补成 `1`，并保证 `AST_OP_FOR` 永远有四个孩子，方便 IR 层按固定槽位生成控制流。
 
 常见坑位：
 
 - 一元负号当前转成 `0 - expr`，IR 层会按右侧类型做 int/float 隐式转换。
 - `visitExpressionStatement` 返回 `nullptr` 表示空语句，上层插入孩子前必须判空。
+- `for` 的缺省初始化和步进不能直接省略孩子，否则 IR 层会分不清哪个槽位缺失。
 - 给新运算符补了文法却没同步 `buildLeftAssociativeBinaryTree` 的操作符映射，会生成错误 AST。
 - 把 `visitCompUnit` 写成“先收集变量、再收集函数”会破坏源码顺序。
 - 数组维度表达式在前端只保留 AST，不在 CST 阶段强行求值；是否为常量正整数由 IR 层检查。
@@ -243,7 +247,7 @@ OutputAST
 
 修改建议：
 
-- 新 AST 节点出现时，优先补 `getNodeName` 映射。
+- 新 AST 节点出现时，优先补 `getNodeName` 映射；例如 `AST_OP_FOR` 映射成 `for`。
 - 可以把样式参数（颜色、shape、font）提取成配置常量。
 
 常见坑位：

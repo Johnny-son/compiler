@@ -85,6 +85,7 @@ protected:
 	// 控制流语句节点翻译成线性中间IR
 	bool ir_if(ast_node * node);
 	bool ir_while(ast_node * node);
+	bool ir_for(ast_node * node);
 	bool ir_break(ast_node * node);
 	bool ir_continue(ast_node * node);
 

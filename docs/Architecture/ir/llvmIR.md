@@ -440,6 +440,49 @@ break -> endBlock
 pop()
 ```
 
+`for` 循环与 `while` 本质上也是基本块跳转，只是多了初始化和步进块。
+
+源代码：
+
+```c
+for (i = 0; i < n; i = i + 1) {
+    sum = sum + i;
+}
+```
+
+典型 lowering：
+
+```llvm
+  store i32 0, ptr %i.addr
+  br label %for.cond
+
+for.cond:
+  %i.val = load i32, ptr %i.addr
+  %cond = icmp slt i32 %i.val, %n
+  br i1 %cond, label %for.body, label %for.end
+
+for.body:
+  ...
+  br label %for.step
+
+for.step:
+  %i.old = load i32, ptr %i.addr
+  %i.next = add i32 %i.old, 1
+  store i32 %i.next, ptr %i.addr
+  br label %for.cond
+
+for.end:
+```
+
+因此 `for` 的循环上下文是：
+
+```text
+push({stepBlock, endBlock})
+continue -> stepBlock
+break -> endBlock
+pop()
+```
+
 ---
 
 ## 12. PHI：SSA 控制流合流

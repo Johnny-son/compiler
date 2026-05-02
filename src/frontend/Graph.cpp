@@ -79,6 +79,9 @@ string getNodeName(ast_node * astnode)
 		case ast_operator_type::AST_OP_WHILE:
 			nodeName = "while";
 			break;
+		case ast_operator_type::AST_OP_FOR:
+			nodeName = "for";
+			break;
 		case ast_operator_type::AST_OP_BREAK:
 			nodeName = "break";
 			break;

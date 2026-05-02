@@ -67,6 +67,9 @@ enum class ast_operator_type : int {
 	// while语句运算符，孩子为条件、循环体
 	AST_OP_WHILE,
 
+	// for语句运算符，孩子为初始化、条件、步进、循环体
+	AST_OP_FOR,
+
 	// break语句运算符
 	AST_OP_BREAK,
 

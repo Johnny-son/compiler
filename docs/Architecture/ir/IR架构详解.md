@@ -1502,7 +1502,7 @@ endBlock:
 
 关键接口：`createBlock()`、`emitCondValue()`、`createCondBr()`、`hasTerminator()`、`createBr()`。
 
-## 12.10 while / break / continue
+## 12.10 while / for / break / continue
 
 ```text
 br condBlock
@@ -1523,6 +1523,36 @@ endBlock:
 ```text
 loopTargets.push_back({condBlock, endBlock})
 continue -> br condBlock
+break    -> br endBlock
+loopTargets.pop_back()
+```
+
+`for (init; cond; step) body` 会按固定四块生成：
+
+```text
+init
+br condBlock
+
+condBlock:
+    condbr cond, bodyBlock, endBlock
+
+bodyBlock:
+    body
+    br stepBlock
+
+stepBlock:
+    step
+    br condBlock
+
+endBlock:
+    后续代码
+```
+
+for 循环上下文与 while 的区别在 continue 目标：
+
+```text
+loopTargets.push_back({stepBlock, endBlock})
+continue -> br stepBlock
 break    -> br endBlock
 loopTargets.pop_back()
 ```

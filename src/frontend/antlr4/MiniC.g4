@@ -64,10 +64,17 @@ statement:
 	| lVal T_ASSIGN expr T_SEMICOLON	# assignStatement
 	| T_IF T_L_PAREN expr T_R_PAREN statement (T_ELSE statement)? # ifStatement
 	| T_WHILE T_L_PAREN expr T_R_PAREN statement # whileStatement
+	| T_FOR T_L_PAREN forInit? T_SEMICOLON expr? T_SEMICOLON forStep? T_R_PAREN statement # forStatement
 	| T_BREAK T_SEMICOLON				# breakStatement
 	| T_CONTINUE T_SEMICOLON			# continueStatement
 	| block								# blockStatement
 	| expr? T_SEMICOLON					# expressionStatement;
+
+// for循环初始化部分，支持赋值或普通表达式
+forInit: lVal T_ASSIGN expr | expr;
+
+// for循环步进部分，支持赋值或普通表达式
+forStep: lVal T_ASSIGN expr | expr;
 
 // 表达式
 expr: lOrExp;
@@ -144,6 +151,7 @@ T_NOT: '!';
 T_IF: 'if';
 T_ELSE: 'else';
 T_WHILE: 'while';
+T_FOR: 'for';
 T_BREAK: 'break';
 T_CONTINUE: 'continue';
 T_RETURN: 'return';

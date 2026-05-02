@@ -98,6 +98,7 @@ IRGenerator::IRGenerator(ast_node * _root, Module * _module) : root(_root), modu
 	ast2ir_handlers[ast_operator_type::AST_OP_RETURN] = &IRGenerator::ir_return;
 	ast2ir_handlers[ast_operator_type::AST_OP_IF] = &IRGenerator::ir_if;
 	ast2ir_handlers[ast_operator_type::AST_OP_WHILE] = &IRGenerator::ir_while;
+	ast2ir_handlers[ast_operator_type::AST_OP_FOR] = &IRGenerator::ir_for;
 	ast2ir_handlers[ast_operator_type::AST_OP_BREAK] = &IRGenerator::ir_break;
 	ast2ir_handlers[ast_operator_type::AST_OP_CONTINUE] = &IRGenerator::ir_continue;
 
@@ -1325,6 +1326,72 @@ bool IRGenerator::ir_while(ast_node * node)
 	loopTargets.pop_back();
 	builder.setInsertPoint(endBlock);
 
+	return true;
+}
+
+// for语句AST节点翻译成MiniLLVM IR
+bool IRGenerator::ir_for(ast_node * node)
+{
+	Function * currentFunc = module->getCurrentFunction();
+	if (currentFunc == nullptr) {
+		report_ir_error("E1212", node != nullptr ? node->line_no : -1, "控制流检查", "for语句不在函数内");
+		return false;
+	}
+
+	if (node == nullptr || node->sons.size() < 4) {
+		report_ir_error("E1213", node != nullptr ? node->line_no : -1, "控制流检查", "for节点结构非法");
+		return false;
+	}
+
+	ast_node * initNode = node->sons[0];
+	ast_node * condExprNode = node->sons[1];
+	ast_node * stepNode = node->sons[2];
+	ast_node * bodyNode = node->sons[3];
+
+	if (!ir_visit_ast_node(initNode)) {
+		return false;
+	}
+
+	BasicBlock * condBlock = currentFunc->createBlock("for.cond");
+	BasicBlock * bodyBlock = currentFunc->createBlock("for.body");
+	BasicBlock * stepBlock = currentFunc->createBlock("for.step");
+	BasicBlock * endBlock = currentFunc->createBlock("for.end");
+
+	builder.createBr(condBlock);
+	builder.setInsertPoint(condBlock);
+
+	ast_node * condNode = ir_visit_ast_node(condExprNode);
+	if (!condNode) {
+		return false;
+	}
+
+	builder.createCondBr(emitCondValue(condNode->val), bodyBlock, endBlock);
+	builder.setInsertPoint(bodyBlock);
+
+	// for的continue目标是步进块，break目标是循环结束块
+	loopTargets.emplace_back(stepBlock, endBlock);
+	ast_node * translatedBody = ir_visit_ast_node(bodyNode);
+	if (!translatedBody) {
+		loopTargets.pop_back();
+		return false;
+	}
+	loopTargets.pop_back();
+
+	if (builder.getInsertBlock() != nullptr && !builder.getInsertBlock()->hasTerminator()) {
+		builder.createBr(stepBlock);
+	}
+
+	builder.setInsertPoint(stepBlock);
+	ast_node * translatedStep = ir_visit_ast_node(stepNode);
+	if (!translatedStep) {
+		return false;
+	}
+
+	if (builder.getInsertBlock() != nullptr && !builder.getInsertBlock()->hasTerminator()) {
+		builder.createBr(condBlock);
+	}
+
+	builder.setInsertPoint(endBlock);
 	return true;
 }
 

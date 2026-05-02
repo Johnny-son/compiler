@@ -34,6 +34,21 @@ ast_node * buildLeftAssociativeBinaryTree(
 	return left;
 }
 
+ast_node * createNoOpStatement(int64_t lineNo)
+{
+	auto * node = ast_node::New(ast_operator_type::AST_OP_BLOCK);
+	node->needScope = false;
+	node->line_no = lineNo;
+	return node;
+}
+
+ast_node * createAssignNode(ast_node * lvalNode, ast_node * exprNode, int64_t lineNo)
+{
+	auto * node = ast_node::New(ast_operator_type::AST_OP_ASSIGN, lvalNode, exprNode);
+	node->line_no = lineNo;
+	return node;
+}
+
 } // namespace
 
 // 构造函数
@@ -220,6 +235,7 @@ std::any MiniCCSTVisitor::visitStatement(MiniCParser::StatementContext * ctx)
 	//   | lVal T_ASSIGN expr T_SEMICOLON
 	//   | T_IF T_L_PAREN expr T_R_PAREN statement (T_ELSE statement)?
 	//   | T_WHILE T_L_PAREN expr T_R_PAREN statement
+	//   | T_FOR T_L_PAREN forInit? T_SEMICOLON expr? T_SEMICOLON forStep? T_R_PAREN statement
 	//   | T_BREAK T_SEMICOLON
 	//   | T_CONTINUE T_SEMICOLON
 	//   | block
@@ -233,6 +249,8 @@ std::any MiniCCSTVisitor::visitStatement(MiniCParser::StatementContext * ctx)
 		return visitIfStatement(ifCtx);
 	} else if (Instanceof(whileCtx, MiniCParser::WhileStatementContext *, ctx)) {
 		return visitWhileStatement(whileCtx);
+	} else if (Instanceof(forCtx, MiniCParser::ForStatementContext *, ctx)) {
+		return visitForStatement(forCtx);
 	} else if (Instanceof(breakCtx, MiniCParser::BreakStatementContext *, ctx)) {
 		return visitBreakStatement(breakCtx);
 	} else if (Instanceof(continueCtx, MiniCParser::ContinueStatementContext *, ctx)) {
@@ -310,6 +328,66 @@ std::any MiniCCSTVisitor::visitWhileStatement(MiniCParser::WhileStatementContext
 	auto * whileNode = ast_node::New(ast_operator_type::AST_OP_WHILE, condNode, bodyNode);
 	whileNode->line_no = (int64_t) ctx->T_WHILE()->getSymbol()->getLine();
 	return whileNode;
+}
+
+// for语句AST构造，孩子顺序固定为初始化、条件、步进、循环体
+std::any MiniCCSTVisitor::visitForStatement(MiniCParser::ForStatementContext * ctx)
+{
+	int64_t lineNo = (int64_t) ctx->T_FOR()->getSymbol()->getLine();
+
+	ast_node * initNode = nullptr;
+	if (ctx->forInit()) {
+		initNode = std::any_cast<ast_node *>(visitForInit(ctx->forInit()));
+	} else {
+		initNode = createNoOpStatement(lineNo);
+	}
+
+	ast_node * condNode = nullptr;
+	if (ctx->expr()) {
+		condNode = std::any_cast<ast_node *>(visitExpr(ctx->expr()));
+	} else {
+		condNode = ast_node::New(digit_int_attr{1, lineNo});
+	}
+
+	ast_node * stepNode = nullptr;
+	if (ctx->forStep()) {
+		stepNode = std::any_cast<ast_node *>(visitForStep(ctx->forStep()));
+	} else {
+		stepNode = createNoOpStatement(lineNo);
+	}
+
+	auto * bodyNode = std::any_cast<ast_node *>(visitStatement(ctx->statement()));
+	if (bodyNode == nullptr) {
+		bodyNode = createNoOpStatement(lineNo);
+	}
+
+	auto * forNode = ast_node::New(ast_operator_type::AST_OP_FOR, initNode, condNode, stepNode, bodyNode);
+	forNode->line_no = lineNo;
+	return forNode;
+}
+
+std::any MiniCCSTVisitor::visitForInit(MiniCParser::ForInitContext * ctx)
+{
+	int64_t lineNo = (int64_t) ctx->getStart()->getLine();
+	if (ctx->T_ASSIGN()) {
+		auto * lvalNode = std::any_cast<ast_node *>(visitLVal(ctx->lVal()));
+		auto * exprNode = std::any_cast<ast_node *>(visitExpr(ctx->expr()));
+		return createAssignNode(lvalNode, exprNode, lineNo);
+	}
+
+	return visitExpr(ctx->expr());
+}
+
+std::any MiniCCSTVisitor::visitForStep(MiniCParser::ForStepContext * ctx)
+{
+	int64_t lineNo = (int64_t) ctx->getStart()->getLine();
+	if (ctx->T_ASSIGN()) {
+		auto * lvalNode = std::any_cast<ast_node *>(visitLVal(ctx->lVal()));
+		auto * exprNode = std::any_cast<ast_node *>(visitExpr(ctx->expr()));
+		return createAssignNode(lvalNode, exprNode, lineNo);
+	}
+
+	return visitExpr(ctx->expr());
 }
 
 // break语句在AST中是无孩子节点，仅保留行号供后续诊断使用
@@ -438,7 +516,7 @@ std::any MiniCCSTVisitor::visitAssignStatement(MiniCParser::AssignStatementConte
 	auto exprNode = std::any_cast<ast_node *>(visitExpr(ctx->expr()));
 
 	// 创建一个AST_OP_ASSIGN类型的中间节点，孩子为Lval和Expr
-	return ast_node::New(ast_operator_type::AST_OP_ASSIGN, lvalNode, exprNode);
+	return createAssignNode(lvalNode, exprNode, (int64_t) ctx->getStart()->getLine());
 }
 
 std::any MiniCCSTVisitor::visitBlockStatement(MiniCParser::BlockStatementContext * ctx)

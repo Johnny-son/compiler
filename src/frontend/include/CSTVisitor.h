@@ -60,6 +60,15 @@ protected:
 	// 内部产生的非终结符whileStatement的分析
 	std::any visitWhileStatement(MiniCParser::WhileStatementContext * ctx) override;
 
+	// 内部产生的非终结符forStatement的分析
+	std::any visitForStatement(MiniCParser::ForStatementContext * ctx) override;
+
+	// 非终结符forInit的分析
+	std::any visitForInit(MiniCParser::ForInitContext * ctx) override;
+
+	// 非终结符forStep的分析
+	std::any visitForStep(MiniCParser::ForStepContext * ctx) override;
+
 	// 内部产生的非终结符breakStatement的分析
 	std::any visitBreakStatement(MiniCParser::BreakStatementContext * ctx) override;
 
