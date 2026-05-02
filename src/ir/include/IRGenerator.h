@@ -143,6 +143,8 @@ protected:
 	bool buildGlobalArrayInitializer(Type * arrayType, ast_node * initNode, std::string & initializerText);
 	bool eval_global_const_float(ast_node * node, float & value);
 	bool buildScalarInitializerText(Type * type, ast_node * initNode, std::string & initializerText);
+	bool isZeroInitializer(ast_node * initNode, Type * type);
+	Type * getScalarElementType(Type * type) const;
 	std::vector<int32_t> getArrayDimensions(Type * arrayType) const;
 	size_t getFlattenElementCount(Type * type) const;
 	std::vector<int32_t> flattenIndexToIndices(size_t flatIndex, const std::vector<int32_t> & dims) const;

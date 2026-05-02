@@ -32,6 +32,7 @@ Module
 ```text
 Value
 ├── ConstInt
+├── ZeroInitializer
 ├── GlobalVariable
 ├── FormalParam
 ├── BasicBlock
@@ -1287,13 +1288,19 @@ fillArrayInitializer()
   -> 缺省元素补 0
 
 emitArrayInitializerStores()
-  -> 局部数组初始化：逐元素 GEP + store
+  -> 局部数组初始化：全零初始化用聚合 store zeroinitializer
+  -> 非全零初始化逐元素 GEP + store
 
 buildGlobalArrayInitializer()
-  -> 全局数组初始化：生成 LLVM 聚合常量文本
+  -> 全局数组初始化：全零初始化直接生成 zeroinitializer
+  -> 非全零初始化生成 LLVM 聚合常量文本
 
 buildScalarInitializerText()
   -> 全局标量初始化：按 int/float 类型生成常量文本
+
+isZeroInitializer()
+  -> 识别 {}、{0} 或显式元素全为 0 的初始化列表
+  -> 避免大数组初始化被展开成海量 GEP/store
 ```
 
 ---
@@ -1429,10 +1436,13 @@ type = buildArrayTypeFromDims(arrayDims, baseType)
 addr = createEntryAlloca(func, type, name)
 module->bindValue(name, addr)
 如果有初始化：
-    fillArrayInitializer()
-    对每个元素：
-        elemAddr = createGEP(addr, {0, i, j, ...})
-        builder.createStore(valueOrZero, elemAddr)
+    如果是全零初始化：
+        builder.createStore(ZeroInitializer(arrayType), addr)
+    否则：
+        fillArrayInitializer()
+        对每个元素：
+            elemAddr = createGEP(addr, {0, i, j, ...})
+            builder.createStore(valueOrZero, elemAddr)
 ```
 
 全局数组：
@@ -1441,7 +1451,8 @@ module->bindValue(name, addr)
 type = buildArrayTypeFromDims(arrayDims, baseType)
 global = module->newVarValue(type, name)
 如果有初始化：
-    buildGlobalArrayInitializer() 生成聚合常量
+    全零初始化直接生成 zeroinitializer
+    非全零初始化由 buildGlobalArrayInitializer() 生成聚合常量
 否则：
     zeroinitializer
 ```

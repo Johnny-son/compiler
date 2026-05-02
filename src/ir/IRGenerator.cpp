@@ -16,6 +16,7 @@
 #include "ir/Values/ConstInt.h"
 #include "ir/Values/FormalParam.h"
 #include "ir/Values/GlobalVariable.h"
+#include "ir/Values/ZeroInitializer.h"
 #include "utils/Status.h"
 
 namespace {
@@ -813,6 +814,40 @@ std::vector<int32_t> IRGenerator::flattenIndexToIndices(size_t flatIndex, const 
 	return indices;
 }
 
+Type * IRGenerator::getScalarElementType(Type * type) const
+{
+	Type * current = type;
+	while (auto * arrayType = dynamic_cast<ArrayType *>(current)) {
+		current = arrayType->getElementType();
+	}
+	return current;
+}
+
+bool IRGenerator::isZeroInitializer(ast_node * initNode, Type * type)
+{
+	if (initNode == nullptr) {
+		return true;
+	}
+
+	if (initNode->node_type == ast_operator_type::AST_OP_INIT_LIST) {
+		for (auto * child: initNode->sons) {
+			if (!isZeroInitializer(child, type)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	Type * scalarType = getScalarElementType(type);
+	if (scalarType != nullptr && scalarType->isFloatType()) {
+		float value = 0.0f;
+		return eval_global_const_float(initNode, value) && value == 0.0f;
+	}
+
+	int32_t value = 0;
+	return eval_global_const_expr(initNode, value) && value == 0;
+}
+
 bool IRGenerator::fillArrayInitializer(ast_node * initNode, Type * type, std::vector<ast_node *> & slots, size_t baseIndex)
 {
 	if (initNode == nullptr) {
@@ -862,6 +897,10 @@ bool IRGenerator::fillArrayInitializer(ast_node * initNode, Type * type, std::ve
 
 bool IRGenerator::emitArrayInitializerStores(Value * arrayAddr, Type * arrayType, ast_node * initNode)
 {
+	if (isZeroInitializer(initNode, arrayType)) {
+		return builder.createStore(new ZeroInitializer(arrayType), arrayAddr) != nullptr;
+	}
+
 	const size_t total = getFlattenElementCount(arrayType);
 	std::vector<ast_node *> slots(total, nullptr);
 	if (!fillArrayInitializer(initNode, arrayType, slots, 0)) {
@@ -928,7 +967,7 @@ bool IRGenerator::buildScalarInitializerText(Type * type, ast_node * initNode, s
 
 bool IRGenerator::buildGlobalArrayInitializer(Type * arrayType, ast_node * initNode, std::string & initializerText)
 {
-	if (initNode == nullptr) {
+	if (isZeroInitializer(initNode, arrayType)) {
 		initializerText = "zeroinitializer";
 		return true;
 	}
