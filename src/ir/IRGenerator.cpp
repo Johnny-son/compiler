@@ -1564,9 +1564,13 @@ bool IRGenerator::ir_assign(ast_node * node)
 	ast_node * son1_node = node->sons[0];
 	ast_node * son2_node = node->sons[1];
 
-	// 赋值节点，自右往左运算
+	// 赋值节点按课程测试约定自右往左求值。右侧可能修改左侧下标中使用的变量，
+	// 例如 b[n] = test(a)，必须先执行 test(a)，再计算 b[n] 的地址。
+	ast_node * right = ir_visit_ast_node(son2_node);
+	if (!right) {
+		return false;
+	}
 
-	// 赋值运算符的左侧操作数
 	ast_node * left = ir_visit_ast_node(son1_node);
 	if (!left) {
 		return false;
@@ -1588,12 +1592,6 @@ bool IRGenerator::ir_assign(ast_node * node)
 			"常量赋值",
 			"常量(%s)不允许重新赋值",
 			son1_node != nullptr ? son1_node->name.c_str() : "<unknown>");
-		return false;
-	}
-
-	// 赋值运算符的右侧操作数
-	ast_node * right = ir_visit_ast_node(son2_node);
-	if (!right) {
 		return false;
 	}
 
@@ -1743,12 +1741,15 @@ bool IRGenerator::ir_variable_declare(ast_node * node)
 	node->val = alloca;
 	node->val->setConstValue(node->isConst);
 
-	if (initExpr == nullptr) {
-		return true;
+	if (dimsNode != nullptr) {
+		if (initExpr == nullptr) {
+			return builder.createStore(new ZeroInitializer(declaredType), node->val) != nullptr;
+		}
+		return emitArrayInitializerStores(node->val, declaredType, initExpr);
 	}
 
-	if (dimsNode != nullptr) {
-		return emitArrayInitializerStores(node->val, declaredType, initExpr);
+	if (initExpr == nullptr) {
+		return true;
 	}
 
 	ast_node * init_node = ir_visit_ast_node(initExpr);

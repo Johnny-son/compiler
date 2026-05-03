@@ -1378,13 +1378,15 @@ zext -> i32 0/1
 ## 12.7 赋值
 
 ```text
-left = ir_visit_ast_node(lhs)     // 地址
-如果 left->val 是 constValue，报 E1303
 right = ir_visit_ast_node(rhs)
 value = emitRValue(right->val)
+left = ir_visit_ast_node(lhs)     // 地址
+如果 left->val 是 constValue，报 E1303
 builder.createStore(value, left->val)
 node->val = value
 ```
+
+赋值按课程测试约定自右往左求值。右侧表达式可能修改左侧下标中使用的变量，例如 `b[n] = test(a)`，必须先执行 `test(a)`，再计算 `b[n]` 的地址。
 
 ## 12.7.1 自增自减
 
@@ -1461,14 +1463,15 @@ decl
 type = buildArrayTypeFromDims(arrayDims, baseType)
 addr = createEntryAlloca(func, type, name)
 module->bindValue(name, addr)
-如果有初始化：
-    如果是全零初始化：
-        builder.createStore(ZeroInitializer(arrayType), addr)
-    否则：
-        fillArrayInitializer()
-        对每个元素：
-            elemAddr = createGEP(addr, {0, i, j, ...})
-            builder.createStore(valueOrZero, elemAddr)
+如果没有初始化：
+    builder.createStore(ZeroInitializer(arrayType), addr)
+否则如果是全零初始化：
+    builder.createStore(ZeroInitializer(arrayType), addr)
+否则：
+    fillArrayInitializer()
+    对每个元素：
+        elemAddr = createGEP(addr, {0, i, j, ...})
+        builder.createStore(valueOrZero, elemAddr)
 ```
 
 全局数组：

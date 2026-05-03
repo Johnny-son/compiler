@@ -240,6 +240,7 @@ store i32 %x.new, ptr %x.addr
 标识符节点返回地址。
 赋值左侧不要 emitRValue()。
 赋值右侧必须 emitRValue()。
+赋值表达式按右侧先求值、左侧后求地址的顺序生成。
 普通二元表达式的左右操作数必须 emitRValue()。
 ```
 
@@ -611,6 +612,7 @@ arr[i] = v：生成 GEP，再 store。
 数组初始化：
 
 ```text
+局部数组无初始化   -> store [N x ...] zeroinitializer, [N x ...]* %arr.addr
 局部数组全零初始化 -> store [N x ...] zeroinitializer, [N x ...]* %arr.addr
 局部数组非全零初始化 -> 展开初始化列表，逐元素 GEP + store
 全局数组初始化 -> 输出 LLVM 聚合常量，缺省元素补 0
@@ -1048,7 +1050,7 @@ const 声明 -> 复用变量声明路径，初始化后禁止再次赋值
 语句：
 
 ```text
-赋值 -> 左侧地址，右侧右值，builder.createStore()
+赋值 -> 先右侧右值，再左侧地址，builder.createStore()
 const 赋值 -> createStore 前检查左侧地址 isConstValue()，报 E1303
 return -> emitRValue，builder.createRet()
 if -> createBlock + createCondBr + 补 br + endBlock
