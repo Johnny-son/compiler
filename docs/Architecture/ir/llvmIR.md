@@ -445,7 +445,7 @@ pop()
 源代码：
 
 ```c
-for (i = 0; i < n; i = i + 1) {
+for (i = 0; i < n; i++) {
     sum = sum + i;
 }
 ```
@@ -482,6 +482,19 @@ continue -> stepBlock
 break -> endBlock
 pop()
 ```
+
+前端允许 `for (int i = 0, j = 0; i < n; i++, j++)` 这类写法。变量声明仍按 memory-based lowering 在入口块创建 alloca；逗号分隔的初始化或步进表达式在 AST 中折成顺序 block，IRGenerator 逐条翻译。
+
+自增自减不是 LLVM 的独立指令，而是 load、加减一、store 的组合：
+
+```llvm
+; i++
+%old = load i32, ptr %i.addr
+%next = add i32 %old, 1
+store i32 %next, ptr %i.addr
+```
+
+前置表达式返回 `%next`，后置表达式返回 `%old`。
 
 ---
 
@@ -1028,6 +1041,7 @@ ir_function_body()
 const 声明 -> 复用变量声明路径，初始化后禁止再次赋值
 二元表达式 -> emitRValue(lhs), emitRValue(rhs), builder.createXXX()
 关系表达式 -> builder.createICmpXXX()，需要 i32 值时 zext
+自增自减 -> load old，add/sub 1，store new；前置返回 new，后置返回 old
 函数调用 -> 查 callee，实参 emitRValue，builder.createCall()
 ```
 

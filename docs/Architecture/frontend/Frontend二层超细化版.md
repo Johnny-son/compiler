@@ -23,7 +23,8 @@ CMake custom command
 - 新语法先在 `g4` 增规则，再同步 `CSTVisitor` 节点转换。
 - 对运算优先级改动必须同时验证 `relExp/eqExp/lAndExp/lOrExp/addExp/mulExp/unaryExp` 分层。
 - `if/else`、`while`、`for`、函数形参与实参列表这类成组规则，改文法时要连同 `statement/funcDef/unaryExp` 入口一起检查。
-- `for` 语法当前入口是 `forInit/forStep`，初始化和步进部分支持赋值或普通表达式，条件缺省时由 CSTVisitor 补成常量真。
+- `for` 语法当前入口是 `forInit/forStep/forItem`，初始化部分支持变量声明、赋值或普通表达式，步进部分支持逗号分隔的多个赋值或普通表达式，条件缺省时由 CSTVisitor 补成常量真。
+- 自增自减词法是 `T_INC/T_DEC`，前置形式挂在 `unaryExp`，后置形式挂在 `primaryExp` 的 `lVal` 后面。
 - 数组语法需要同时覆盖声明维度、左值下标、初始化列表和函数形参数组退化；当前入口是 `arrayDims/funcArrayDims/initVal/lVal`。
 - 基本类型扩展时要区分 `funcType` 和 `basicType`：函数返回允许 `void`，变量、常量和形参不允许 `void`。
 - 浮点常量需要覆盖普通小数、科学计数法和十六进制浮点形式，词法规则必须放在整数字面量规则之前。
@@ -76,6 +77,7 @@ IRGenerator::run
 - 数组相关节点当前是 `AST_OP_ARRAY_DIMS`、`AST_OP_ARRAY_ACCESS`、`AST_OP_INIT_LIST`；函数形参数组第一维省略用 `firstArrayDimOmitted` 标记。
 - 浮点字面量使用 `AST_OP_LEAF_LITERAL_FLOAT`，节点类型设置为 `FloatType`。
 - `AST_OP_FOR` 的孩子顺序固定为：初始化、条件、步进、循环体；缺省初始化和步进用不引入作用域的空 block 占位。
+- 自增自减对应 `AST_OP_PRE_INC`、`AST_OP_PRE_DEC`、`AST_OP_POST_INC`、`AST_OP_POST_DEC`；孩子是被更新的 `lVal`。
 
 常见坑位：
 
@@ -168,6 +170,7 @@ ASTGenerator::run
 - 新文法规则要先在此声明 override，再在 `.cpp` 实现。
 - 数组规则新增后，需要声明 `visitArrayDims`、`visitFuncArrayDims`、`visitInitVal`，否则生成基类方法不会被项目 visitor 接住。
 - 增加 `funcType` 后，需要声明并实现 `visitFuncType`，否则函数返回类型会继续被旧的 `T_INT` 路径固定住。
+- `for` 头部拆出 `forItem` 后，需要同步声明 `visitForItem`，否则逗号分隔的初始化或步进表达式不会进入 AST。
 
 常见坑位：
 
@@ -201,6 +204,9 @@ run
 - `visitInitVal` 中普通表达式直接返回表达式节点，花括号初始化生成 `AST_OP_INIT_LIST`，支持空列表和嵌套列表。
 - `visitFuncFParam` 中 `int a[]`、`float a[]` 或多维数组形参会把 `AST_OP_ARRAY_DIMS` 挂到形参节点下，第一维省略交给 IR 层降成指针。
 - `visitForStatement` 会把缺省条件补成 `1`，并保证 `AST_OP_FOR` 永远有四个孩子，方便 IR 层按固定槽位生成控制流。
+- `visitForInit` 支持 `int i = 0, j = 0` 这类声明初始化，也支持把 `i = 0, j = 0` 折成不引入作用域的 block。
+- `visitForStep` 同样会把 `i++, j--` 这类逗号步进折成不引入作用域的 block。
+- `visitUnaryExp` 生成前置自增自减节点；`visitPrimaryExp` 生成后置自增自减节点，保证表达式值语义交给 IR 层区分。
 
 常见坑位：
 

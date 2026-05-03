@@ -93,6 +93,10 @@ IRGenerator::IRGenerator(ast_node * _root, Module * _module) : root(_root), modu
 	ast2ir_handlers[ast_operator_type::AST_OP_LAND] = &IRGenerator::ir_logical_and;
 	ast2ir_handlers[ast_operator_type::AST_OP_LOR] = &IRGenerator::ir_logical_or;
 	ast2ir_handlers[ast_operator_type::AST_OP_NOT] = &IRGenerator::ir_logical_not;
+	ast2ir_handlers[ast_operator_type::AST_OP_PRE_INC] = &IRGenerator::ir_pre_inc;
+	ast2ir_handlers[ast_operator_type::AST_OP_PRE_DEC] = &IRGenerator::ir_pre_dec;
+	ast2ir_handlers[ast_operator_type::AST_OP_POST_INC] = &IRGenerator::ir_post_inc;
+	ast2ir_handlers[ast_operator_type::AST_OP_POST_DEC] = &IRGenerator::ir_post_dec;
 
 	/* 语句 */
 	ast2ir_handlers[ast_operator_type::AST_OP_ASSIGN] = &IRGenerator::ir_assign;
@@ -1207,6 +1211,90 @@ bool IRGenerator::ir_logical_not(ast_node * node)
 	return true;
 }
 
+bool IRGenerator::ir_self_update(ast_node * node, bool increment, bool prefix)
+{
+	if (node == nullptr || node->sons.empty()) {
+		report_ir_error("E1220", node != nullptr ? node->line_no : -1, "自增自减", "自增自减节点结构非法");
+		return false;
+	}
+
+	ast_node * lvalNode = node->sons[0];
+	ast_node * lval = ir_visit_ast_node(lvalNode);
+	if (lval == nullptr || lval->val == nullptr) {
+		report_ir_error("E1221", node != nullptr ? node->line_no : -1, "自增自减", "自增自减左值无效");
+		return false;
+	}
+
+	if (lval->val->isConstValue()) {
+		report_ir_error(
+			"E1303",
+			lvalNode != nullptr ? lvalNode->line_no : (node != nullptr ? node->line_no : -1),
+			"常量赋值",
+			"常量(%s)不允许重新赋值",
+			lvalNode != nullptr ? lvalNode->name.c_str() : "<unknown>");
+		return false;
+	}
+
+	Type * targetType = nullptr;
+	if (auto * ptrType = dynamic_cast<PointerType *>(lval->val->getType()); ptrType != nullptr) {
+		targetType = const_cast<Type *>(ptrType->getPointeeType());
+	} else if (dynamic_cast<GlobalVariable *>(lval->val) != nullptr) {
+		targetType = lval->val->getType();
+	}
+
+	if (targetType == nullptr || targetType->isArrayType() || targetType->isPointerType()) {
+		report_ir_error("E1222", node != nullptr ? node->line_no : -1, "自增自减", "自增自减只支持标量左值");
+		return false;
+	}
+
+	Value * oldValue = emitRValue(lval->val, "self.old");
+	if (oldValue == nullptr) {
+		return false;
+	}
+
+	Value * delta = targetType->isFloatType() ? static_cast<Value *>(module->newConstFloat(1.0f)) :
+												static_cast<Value *>(module->newConstInt(1));
+	Value * newValue = nullptr;
+	if (targetType->isFloatType()) {
+		oldValue = convertValueToType(oldValue, targetType, "self.fp");
+		newValue = increment ? static_cast<Value *>(builder.createFAdd(oldValue, delta, "self.next")) :
+							   static_cast<Value *>(builder.createFSub(oldValue, delta, "self.next"));
+	} else {
+		oldValue = convertValueToType(oldValue, targetType, "self.int");
+		newValue = increment ? static_cast<Value *>(builder.createAdd(oldValue, delta, "self.next")) :
+							   static_cast<Value *>(builder.createSub(oldValue, delta, "self.next"));
+	}
+
+	if (oldValue == nullptr || newValue == nullptr) {
+		report_ir_error("E1223", node != nullptr ? node->line_no : -1, "自增自减", "自增自减类型转换失败");
+		return false;
+	}
+
+	builder.createStore(newValue, lval->val);
+	node->val = prefix ? newValue : oldValue;
+	return true;
+}
+
+bool IRGenerator::ir_pre_inc(ast_node * node)
+{
+	return ir_self_update(node, true, true);
+}
+
+bool IRGenerator::ir_pre_dec(ast_node * node)
+{
+	return ir_self_update(node, false, true);
+}
+
+bool IRGenerator::ir_post_inc(ast_node * node)
+{
+	return ir_self_update(node, true, false);
+}
+
+bool IRGenerator::ir_post_dec(ast_node * node)
+{
+	return ir_self_update(node, false, false);
+}
+
 // 逻辑与AST节点翻译成线性中间IR，按短路语义生成控制流
 bool IRGenerator::ir_logical_and(ast_node * node)
 {
@@ -1387,51 +1475,63 @@ bool IRGenerator::ir_for(ast_node * node)
 	ast_node * stepNode = node->sons[2];
 	ast_node * bodyNode = node->sons[3];
 
-	if (!ir_visit_ast_node(initNode)) {
-		return false;
-	}
+	module->enterScope();
+	bool loopTargetPushed = false;
+	bool ok = false;
+	do {
+		if (!ir_visit_ast_node(initNode)) {
+			break;
+		}
 
-	BasicBlock * condBlock = currentFunc->createBlock("for.cond");
-	BasicBlock * bodyBlock = currentFunc->createBlock("for.body");
-	BasicBlock * stepBlock = currentFunc->createBlock("for.step");
-	BasicBlock * endBlock = currentFunc->createBlock("for.end");
+		BasicBlock * condBlock = currentFunc->createBlock("for.cond");
+		BasicBlock * bodyBlock = currentFunc->createBlock("for.body");
+		BasicBlock * stepBlock = currentFunc->createBlock("for.step");
+		BasicBlock * endBlock = currentFunc->createBlock("for.end");
 
-	builder.createBr(condBlock);
-	builder.setInsertPoint(condBlock);
-
-	ast_node * condNode = ir_visit_ast_node(condExprNode);
-	if (!condNode) {
-		return false;
-	}
-
-	builder.createCondBr(emitCondValue(condNode->val), bodyBlock, endBlock);
-	builder.setInsertPoint(bodyBlock);
-
-	// for的continue目标是步进块，break目标是循环结束块
-	loopTargets.emplace_back(stepBlock, endBlock);
-	ast_node * translatedBody = ir_visit_ast_node(bodyNode);
-	if (!translatedBody) {
-		loopTargets.pop_back();
-		return false;
-	}
-	loopTargets.pop_back();
-
-	if (builder.getInsertBlock() != nullptr && !builder.getInsertBlock()->hasTerminator()) {
-		builder.createBr(stepBlock);
-	}
-
-	builder.setInsertPoint(stepBlock);
-	ast_node * translatedStep = ir_visit_ast_node(stepNode);
-	if (!translatedStep) {
-		return false;
-	}
-
-	if (builder.getInsertBlock() != nullptr && !builder.getInsertBlock()->hasTerminator()) {
 		builder.createBr(condBlock);
-	}
+		builder.setInsertPoint(condBlock);
 
-	builder.setInsertPoint(endBlock);
-	return true;
+		ast_node * condNode = ir_visit_ast_node(condExprNode);
+		if (!condNode) {
+			break;
+		}
+
+		builder.createCondBr(emitCondValue(condNode->val), bodyBlock, endBlock);
+		builder.setInsertPoint(bodyBlock);
+
+		// for的continue目标是步进块，break目标是循环结束块
+		loopTargets.emplace_back(stepBlock, endBlock);
+		loopTargetPushed = true;
+		ast_node * translatedBody = ir_visit_ast_node(bodyNode);
+		if (!translatedBody) {
+			break;
+		}
+		loopTargets.pop_back();
+		loopTargetPushed = false;
+
+		if (builder.getInsertBlock() != nullptr && !builder.getInsertBlock()->hasTerminator()) {
+			builder.createBr(stepBlock);
+		}
+
+		builder.setInsertPoint(stepBlock);
+		ast_node * translatedStep = ir_visit_ast_node(stepNode);
+		if (!translatedStep) {
+			break;
+		}
+
+		if (builder.getInsertBlock() != nullptr && !builder.getInsertBlock()->hasTerminator()) {
+			builder.createBr(condBlock);
+		}
+
+		builder.setInsertPoint(endBlock);
+		ok = true;
+	} while (false);
+
+	if (loopTargetPushed) {
+		loopTargets.pop_back();
+	}
+	module->leaveScope();
+	return ok;
 }
 
 // break语句AST节点翻译成线性中间IR

@@ -136,6 +136,14 @@ enum class ast_operator_type : int {
 	// 逻辑非运算符!
 	AST_OP_NOT,
 
+	// 前置自增、自减
+	AST_OP_PRE_INC,
+	AST_OP_PRE_DEC,
+
+	// 后置自增、自减
+	AST_OP_POST_INC,
+	AST_OP_POST_DEC,
+
 	// 最大标识符，表示非法运算符
 	AST_OP_MAX,
 };

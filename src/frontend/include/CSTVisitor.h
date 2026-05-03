@@ -69,6 +69,9 @@ protected:
 	// 非终结符forStep的分析
 	std::any visitForStep(MiniCParser::ForStepContext * ctx) override;
 
+	// 非终结符forItem的分析
+	std::any visitForItem(MiniCParser::ForItemContext * ctx) override;
+
 	// 内部产生的非终结符breakStatement的分析
 	std::any visitBreakStatement(MiniCParser::BreakStatementContext * ctx) override;
 

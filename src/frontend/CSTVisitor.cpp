@@ -42,9 +42,21 @@ ast_node * createNoOpStatement(int64_t lineNo)
 	return node;
 }
 
+ast_node * createNoScopeBlock(int64_t lineNo)
+{
+	return createNoOpStatement(lineNo);
+}
+
 ast_node * createAssignNode(ast_node * lvalNode, ast_node * exprNode, int64_t lineNo)
 {
 	auto * node = ast_node::New(ast_operator_type::AST_OP_ASSIGN, lvalNode, exprNode);
+	node->line_no = lineNo;
+	return node;
+}
+
+ast_node * createSelfUpdateNode(ast_operator_type op, ast_node * lvalNode, int64_t lineNo)
+{
+	auto * node = ast_node::New(op, lvalNode);
 	node->line_no = lineNo;
 	return node;
 }
@@ -369,16 +381,57 @@ std::any MiniCCSTVisitor::visitForStatement(MiniCParser::ForStatementContext * c
 std::any MiniCCSTVisitor::visitForInit(MiniCParser::ForInitContext * ctx)
 {
 	int64_t lineNo = (int64_t) ctx->getStart()->getLine();
-	if (ctx->T_ASSIGN()) {
-		auto * lvalNode = std::any_cast<ast_node *>(visitLVal(ctx->lVal()));
-		auto * exprNode = std::any_cast<ast_node *>(visitExpr(ctx->expr()));
-		return createAssignNode(lvalNode, exprNode, lineNo);
+	if (ctx->basicType()) {
+		auto * stmtNode = ast_node::New(ast_operator_type::AST_OP_DECL_STMT);
+		stmtNode->line_no = lineNo;
+		stmtNode->needScope = false;
+
+		type_attr typeAttr = std::any_cast<type_attr>(visitBasicType(ctx->basicType()));
+		for (auto * varCtx: ctx->varDef()) {
+			int64_t varLineNo = (int64_t) varCtx->T_ID()->getSymbol()->getLine();
+			ast_node * idNode = ast_node::New(varCtx->T_ID()->getText(), varLineNo);
+			ast_node * typeNode = ast_node::create_type_node(typeAttr);
+			ast_node * declNode = ast_node::New(ast_operator_type::AST_OP_VAR_DECL, typeNode, idNode);
+			declNode->type = typeNode->type;
+
+			if (varCtx->arrayDims()) {
+				ast_node * dimsNode = std::any_cast<ast_node *>(visitArrayDims(varCtx->arrayDims()));
+				(void) declNode->insert_son_node(dimsNode);
+			}
+
+			if (varCtx->initVal()) {
+				ast_node * initNode = std::any_cast<ast_node *>(visitInitVal(varCtx->initVal()));
+				(void) declNode->insert_son_node(initNode);
+			}
+
+			(void) stmtNode->insert_son_node(declNode);
+		}
+
+		return stmtNode;
 	}
 
-	return visitExpr(ctx->expr());
+	auto * blockNode = createNoScopeBlock(lineNo);
+	for (auto * itemCtx: ctx->forItem()) {
+		auto * itemNode = std::any_cast<ast_node *>(visitForItem(itemCtx));
+		(void) blockNode->insert_son_node(itemNode);
+	}
+
+	return blockNode->sons.size() == 1 ? blockNode->sons.front() : blockNode;
 }
 
 std::any MiniCCSTVisitor::visitForStep(MiniCParser::ForStepContext * ctx)
+{
+	int64_t lineNo = (int64_t) ctx->getStart()->getLine();
+	auto * blockNode = createNoScopeBlock(lineNo);
+	for (auto * itemCtx: ctx->forItem()) {
+		auto * itemNode = std::any_cast<ast_node *>(visitForItem(itemCtx));
+		(void) blockNode->insert_son_node(itemNode);
+	}
+
+	return blockNode->sons.size() == 1 ? blockNode->sons.front() : blockNode;
+}
+
+std::any MiniCCSTVisitor::visitForItem(MiniCParser::ForItemContext * ctx)
 {
 	int64_t lineNo = (int64_t) ctx->getStart()->getLine();
 	if (ctx->T_ASSIGN()) {
@@ -618,7 +671,17 @@ std::any MiniCCSTVisitor::visitMulOp(MiniCParser::MulOpContext * ctx)
 
 std::any MiniCCSTVisitor::visitUnaryExp(MiniCParser::UnaryExpContext * ctx)
 {
-	// 识别文法产生式：unaryExp: unaryOp unaryExp | primaryExp | T_ID T_L_PAREN realParamList? T_R_PAREN;
+	// 识别文法产生式：unaryExp: T_INC lVal | T_DEC lVal | unaryOp unaryExp | primaryExp | T_ID T_L_PAREN realParamList? T_R_PAREN;
+
+	if (ctx->T_INC()) {
+		auto * lvalNode = std::any_cast<ast_node *>(visitLVal(ctx->lVal()));
+		return createSelfUpdateNode(ast_operator_type::AST_OP_PRE_INC, lvalNode, (int64_t) ctx->getStart()->getLine());
+	}
+
+	if (ctx->T_DEC()) {
+		auto * lvalNode = std::any_cast<ast_node *>(visitLVal(ctx->lVal()));
+		return createSelfUpdateNode(ast_operator_type::AST_OP_PRE_DEC, lvalNode, (int64_t) ctx->getStart()->getLine());
+	}
 
 	if (ctx->unaryOp()) {
 		// 一元表达式递归构造，优先把内层unaryExp先翻译成AST
@@ -686,7 +749,7 @@ std::any MiniCCSTVisitor::visitUnaryOp(MiniCParser::UnaryOpContext * ctx)
 
 std::any MiniCCSTVisitor::visitPrimaryExp(MiniCParser::PrimaryExpContext * ctx)
 {
-	// 识别文法产生式 primaryExp: T_L_PAREN expr T_R_PAREN | T_DIGIT | T_FLOAT_LITERAL | lVal;
+	// 识别文法产生式 primaryExp: T_L_PAREN expr T_R_PAREN | T_DIGIT | T_FLOAT_LITERAL | lVal (T_INC | T_DEC)?;
 
 	ast_node * node = nullptr;
 
@@ -703,8 +766,13 @@ std::any MiniCCSTVisitor::visitPrimaryExp(MiniCParser::PrimaryExpContext * ctx)
 		node = ast_node::New(digit_real_attr{val, lineNo});
 	} else if (ctx->lVal()) {
 		// 具有左值的表达式
-		// 识别 primaryExp: lVal
+		// 识别 primaryExp: lVal (T_INC | T_DEC)?
 		node = std::any_cast<ast_node *>(visitLVal(ctx->lVal()));
+		if (ctx->T_INC()) {
+			node = createSelfUpdateNode(ast_operator_type::AST_OP_POST_INC, node, (int64_t) ctx->getStart()->getLine());
+		} else if (ctx->T_DEC()) {
+			node = createSelfUpdateNode(ast_operator_type::AST_OP_POST_DEC, node, (int64_t) ctx->getStart()->getLine());
+		}
 	} else if (ctx->expr()) {
 		// 带有括号的表达式
 		// primaryExp: T_L_PAREN expr T_R_PAREN

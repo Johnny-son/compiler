@@ -76,6 +76,12 @@ protected:
 	bool ir_logical_or(ast_node * node);
 	bool ir_logical_not(ast_node * node);
 
+	// 自增自减AST节点翻译成MiniLLVM IR
+	bool ir_pre_inc(ast_node * node);
+	bool ir_pre_dec(ast_node * node);
+	bool ir_post_inc(ast_node * node);
+	bool ir_post_dec(ast_node * node);
+
 	// 赋值AST节点翻译成线性中间IR
 	bool ir_assign(ast_node * node);
 
@@ -124,6 +130,7 @@ protected:
 
 	// 通用二元AST节点翻译成线性中间IR
 	bool ir_binary(ast_node * node, BinaryEmitOp op);
+	bool ir_self_update(ast_node * node, bool increment, bool prefix);
 
 	Value * emitRValue(Value * value, const std::string & name = "");
 	Value * emitCondValue(Value * value);

@@ -70,11 +70,14 @@ statement:
 	| block								# blockStatement
 	| expr? T_SEMICOLON					# expressionStatement;
 
-// for循环初始化部分，支持赋值或普通表达式
-forInit: lVal T_ASSIGN expr | expr;
+// for循环初始化部分，支持变量声明、赋值或普通表达式，多个表达式用逗号分隔
+forInit: basicType varDef (T_COMMA varDef)* | forItem (T_COMMA forItem)*;
 
-// for循环步进部分，支持赋值或普通表达式
-forStep: lVal T_ASSIGN expr | expr;
+// for循环步进部分，支持赋值或普通表达式，多个表达式用逗号分隔
+forStep: forItem (T_COMMA forItem)*;
+
+// for循环头中的单个表达式项
+forItem: lVal T_ASSIGN expr | expr;
 
 // 表达式
 expr: lOrExp;
@@ -104,13 +107,18 @@ mulExp: unaryExp (mulOp unaryExp)*;
 mulOp: T_MUL | T_DIV | T_MOD;
 
 // 一元表达式
-unaryExp: unaryOp unaryExp | primaryExp | T_ID T_L_PAREN realParamList? T_R_PAREN;
+unaryExp:
+	T_INC lVal
+	| T_DEC lVal
+	| unaryOp unaryExp
+	| primaryExp
+	| T_ID T_L_PAREN realParamList? T_R_PAREN;
 
 // 一元运算符
 unaryOp: T_ADD | T_SUB | T_NOT;
 
 // 基本表达式：括号表达式、整数、浮点数、左值表达式
-primaryExp: T_L_PAREN expr T_R_PAREN | T_DIGIT | T_FLOAT_LITERAL | lVal;
+primaryExp: T_L_PAREN expr T_R_PAREN | T_DIGIT | T_FLOAT_LITERAL | lVal (T_INC | T_DEC)?;
 
 // 实参列表
 realParamList: expr (T_COMMA expr)*;
@@ -130,6 +138,9 @@ T_R_BRACKET: ']';
 
 T_ASSIGN: '=';
 T_COMMA: ',';
+
+T_INC: '++';
+T_DEC: '--';
 
 T_EQ: '==';
 T_NE: '!=';

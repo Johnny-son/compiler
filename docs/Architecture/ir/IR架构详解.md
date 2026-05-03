@@ -1386,7 +1386,33 @@ builder.createStore(value, left->val)
 node->val = value
 ```
 
-## 12.7.1 常量声明
+## 12.7.1 自增自减
+
+自增自减节点分为前置和后置：
+
+```text
+AST_OP_PRE_INC   ++x
+AST_OP_PRE_DEC   --x
+AST_OP_POST_INC  x++
+AST_OP_POST_DEC  x--
+```
+
+IRGenerator 统一走 `ir_self_update()`：
+
+```text
+addr = ir_visit_ast_node(lVal)->val
+如果 addr 是 constValue，报 E1303
+oldValue = emitRValue(addr)
+newValue = oldValue +/- 1
+builder.createStore(newValue, addr)
+
+前置表达式 node->val = newValue
+后置表达式 node->val = oldValue
+```
+
+该路径只支持标量左值，数组对象或指针对象不能直接自增自减；数组元素如 `a[i]++` 会先通过 `AST_OP_ARRAY_ACCESS` 得到元素地址，再按普通标量更新。
+
+## 12.7.2 常量声明
 
 ```text
 AST_OP_CONST_DECL -> ir_const_declaration()
@@ -1417,7 +1443,7 @@ const 声明没有初始化值 -> E1304
 对 const 左值重新赋值 -> E1303
 ```
 
-## 12.7.2 数组声明和初始化
+## 12.7.3 数组声明和初始化
 
 数组声明节点仍然复用 `AST_OP_VAR_DECL` / `AST_OP_CONST_DECL`，但孩子中会额外带一个 `AST_OP_ARRAY_DIMS`：
 
@@ -1459,7 +1485,7 @@ global = module->newVarValue(type, name)
 
 数组常量同样会给数组地址 `Value` 标记 `constValue`，数组元素访问生成的 GEP 会继承这个标记，因此 `const int a[2]; a[0] = 1;` 会在赋值阶段报 `E1303`。
 
-## 12.7.3 数组访问
+## 12.7.4 数组访问
 
 数组访问节点是 `AST_OP_ARRAY_ACCESS`，节点名保存数组名，孩子是各维下标表达式。
 
@@ -1538,7 +1564,7 @@ break    -> br endBlock
 loopTargets.pop_back()
 ```
 
-`for (init; cond; step) body` 会按固定四块生成：
+`for (init; cond; step) body` 会按固定四块生成。IR 层会为整个 for 头和循环体外壳进入一个新作用域，因此 `for (int i = 0; ...; i++)` 中声明的 `i` 只在这个 for 内可见。
 
 ```text
 init
@@ -1567,6 +1593,8 @@ continue -> br stepBlock
 break    -> br endBlock
 loopTargets.pop_back()
 ```
+
+前端可能把 `i++, j++` 这样的逗号步进折成一个不引入额外作用域的 block；IR 层按普通 block 顺序翻译其中每个自增自减表达式。
 
 ## 12.11 逻辑与 / 逻辑或
 
