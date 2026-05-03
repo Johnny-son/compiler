@@ -1,10 +1,13 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 #include <string>
 #include <vector>
 
 class Value;
+
+using MachineBlockIndex = std::size_t;
 
 enum class RegisterClass : std::int8_t {
 	GPR
@@ -130,13 +133,20 @@ public:
 	[[nodiscard]] const std::string & label() const;
 	[[nodiscard]] const std::vector<MachineInstr> & instructions() const;
 	[[nodiscard]] std::vector<MachineInstr> & instructions();
+	[[nodiscard]] const std::vector<MachineBlockIndex> & successors() const;
+	[[nodiscard]] const std::vector<MachineBlockIndex> & predecessors() const;
 
 	void emit(const MachineInstr & inst);
 	void emit(MachineOpcode opcode, std::vector<MachineOperand> operands = {});
+	void addSuccessor(MachineBlockIndex index);
+	void addPredecessor(MachineBlockIndex index);
+	void clearCFGLinks();
 
 private:
 	std::string blockLabel;
 	std::vector<MachineInstr> insts;
+	std::vector<MachineBlockIndex> succs;
+	std::vector<MachineBlockIndex> preds;
 };
 
 class MachineFunction {

@@ -7,6 +7,7 @@
 #include "backend/include/IRAdapter.h"
 #include "backend/include/InstructionSelector.h"
 #include "backend/include/MachineAsmLowering.h"
+#include "backend/include/MachineCFG.h"
 #include "backend/include/NaiveRegisterAllocator.h"
 #include "ir/include/Module.h"
 #include "ir/Values/GlobalVariable.h"
@@ -68,6 +69,8 @@ bool BackendDriver::run(Module * module, const std::string & outputFile) const
 		FunctionFrameLayout layout = FrameLayoutBuilder::build(function);
 		InstructionSelector selector(function, layout);
 		MachineFunction machineFunction = selector.run();
+		MachineCFGBuilder cfgBuilder;
+		cfgBuilder.run(machineFunction);
 		NaiveRegisterAllocator allocator;
 		MachineFunction allocatedFunction = allocator.run(machineFunction);
 		MachineAsmLowering lowering(allocatedFunction, layout);

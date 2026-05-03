@@ -2,6 +2,7 @@
 
 #include "ir/include/Value.h"
 
+#include <algorithm>
 #include <sstream>
 #include <utility>
 
@@ -249,6 +250,16 @@ std::vector<MachineInstr> & MachineBasicBlock::instructions()
 	return insts;
 }
 
+const std::vector<MachineBlockIndex> & MachineBasicBlock::successors() const
+{
+	return succs;
+}
+
+const std::vector<MachineBlockIndex> & MachineBasicBlock::predecessors() const
+{
+	return preds;
+}
+
 void MachineBasicBlock::emit(const MachineInstr & inst)
 {
 	insts.push_back(inst);
@@ -257,6 +268,26 @@ void MachineBasicBlock::emit(const MachineInstr & inst)
 void MachineBasicBlock::emit(MachineOpcode opcode, std::vector<MachineOperand> operands)
 {
 	emit(MachineInstr::make(opcode, std::move(operands)));
+}
+
+void MachineBasicBlock::addSuccessor(MachineBlockIndex index)
+{
+	if (std::find(succs.begin(), succs.end(), index) == succs.end()) {
+		succs.push_back(index);
+	}
+}
+
+void MachineBasicBlock::addPredecessor(MachineBlockIndex index)
+{
+	if (std::find(preds.begin(), preds.end(), index) == preds.end()) {
+		preds.push_back(index);
+	}
+}
+
+void MachineBasicBlock::clearCFGLinks()
+{
+	succs.clear();
+	preds.clear();
 }
 
 MachineFunction::MachineFunction(std::string name) : funcName(std::move(name))
@@ -377,6 +408,19 @@ std::string MachineDebugPrinter::toString(const MachineFunction & function)
 	out << "machine function " << function.name() << "\n";
 	for (const auto & block: function.blocks()) {
 		out << block.label() << ":\n";
+		if (!block.predecessors().empty() || !block.successors().empty()) {
+			out << "  # preds:";
+			for (MachineBlockIndex pred: block.predecessors()) {
+				out << " " << function.blocks()[pred].label();
+			}
+			out << "\n";
+
+			out << "  # succs:";
+			for (MachineBlockIndex succ: block.successors()) {
+				out << " " << function.blocks()[succ].label();
+			}
+			out << "\n";
+		}
 		for (const auto & inst: block.instructions()) {
 			out << "  " << opcodeName(inst.opcode);
 			if (!inst.operands.empty()) {

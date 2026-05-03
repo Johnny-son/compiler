@@ -38,6 +38,14 @@ MachineFunction NaiveRegisterAllocator::run(const MachineFunction & function) co
 			newBlock.emit(rewritten);
 		}
 	}
+	for (std::size_t index = 0; index < function.blocks().size(); ++index) {
+		for (MachineBlockIndex succ: function.blocks()[index].successors()) {
+			allocated.blocks()[index].addSuccessor(succ);
+		}
+		for (MachineBlockIndex pred: function.blocks()[index].predecessors()) {
+			allocated.blocks()[index].addPredecessor(pred);
+		}
+	}
 	return allocated;
 }
 
