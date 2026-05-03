@@ -3,8 +3,8 @@
 #include <string>
 #include <unordered_map>
 
-#include "backend/include/Asm.h"
 #include "backend/include/FrameLayout.h"
+#include "backend/include/MachineIR.h"
 
 class BasicBlock;
 
@@ -13,7 +13,7 @@ class InstructionSelector {
 public:
 	InstructionSelector(IRFunctionView function, const FunctionFrameLayout & layout);
 
-	AsmFunction run();
+	MachineFunction run();
 
 private:
 	void translateBlock(const IRBasicBlockView & block, bool isEntryBlock);
@@ -30,23 +30,25 @@ private:
 	void translateBranch(const IRInstView & inst);
 	void translateReturn(const IRInstView & inst);
 
-	void loadValue(const IRValueView & value, const std::string & reg);
-	void storeValue(const std::string & reg, const IRValueView & value);
-	void loadAddress(const IRValueView & value, const std::string & reg);
-	void loadFromPointer(const IRValueView & ptr, Type * valueType, const std::string & reg);
-	void storeToPointer(const std::string & reg, const IRValueView & ptr, Type * valueType);
-	void loadAddressOfGlobal(const IRValueView & value, const std::string & reg);
+	MachineOperand newVRegDef();
+	MachineOperand loadValue(const IRValueView & value);
+	void loadValueTo(const IRValueView & value, const MachineOperand & dst);
+	void storeValue(const MachineOperand & src, const IRValueView & value);
+	void loadAddress(const IRValueView & value, const MachineOperand & dst);
+	void loadFromPointer(const IRValueView & ptr, Type * valueType, const MachineOperand & dst);
+	void storeToPointer(const MachineOperand & src, const IRValueView & ptr, Type * valueType);
+	void loadAddressOfGlobal(const IRValueView & value, const MachineOperand & dst);
 
 	std::string labelName(BasicBlock * block);
 	const StackSlotInfo * slotOf(const IRValueView & value) const;
 	bool isEightByteType(Type * type) const;
-	std::string loadOpcode(Type * type) const;
-	std::string storeOpcode(Type * type) const;
+	MachineOpcode loadOpcode(Type * type) const;
+	MachineOpcode storeOpcode(Type * type) const;
 
 private:
 	IRFunctionView function;
 	const FunctionFrameLayout & frameLayout;
-	AsmFunction asmFunction;
+	MachineFunction machineFunction;
 	std::unordered_map<BasicBlock *, std::string> blockLabels;
 	int nextLabelIndex = 0;
 };

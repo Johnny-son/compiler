@@ -16,16 +16,16 @@
 
 namespace {
 
-constexpr const char * REG_ZERO = "zero";
-constexpr const char * REG_RA = "ra";
-constexpr const char * REG_SP = "sp";
-constexpr const char * REG_FP = "fp";
-constexpr const char * REG_A[] = {"a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7"};
-constexpr const char * REG_T0 = "t0";
-constexpr const char * REG_T1 = "t1";
-constexpr const char * REG_T2 = "t2";
-constexpr const char * REG_T3 = "t3";
-constexpr const char * REG_T4 = "t4";
+constexpr PhysicalReg REG_A[] = {
+	PhysicalReg::A0,
+	PhysicalReg::A1,
+	PhysicalReg::A2,
+	PhysicalReg::A3,
+	PhysicalReg::A4,
+	PhysicalReg::A5,
+	PhysicalReg::A6,
+	PhysicalReg::A7,
+};
 
 Type * pointeeType(Value * value)
 {
@@ -56,11 +56,12 @@ std::string sanitizeLabelPart(std::string name)
 } // namespace
 
 InstructionSelector::InstructionSelector(IRFunctionView function, const FunctionFrameLayout & layout)
-	: function(function), frameLayout(layout), asmFunction(function.name())
+	: function(function), frameLayout(layout), machineFunction(function.name())
 {}
 
-AsmFunction InstructionSelector::run()
+MachineFunction InstructionSelector::run()
 {
+	machineFunction.createBlock(function.name());
 	translateEntry();
 
 	bool firstBlock = true;
@@ -69,7 +70,7 @@ AsmFunction InstructionSelector::run()
 		firstBlock = false;
 	}
 
-	return asmFunction;
+	return machineFunction;
 }
 
 void InstructionSelector::translateBlock(const IRBasicBlockView & block, bool isEntryBlock)
@@ -79,7 +80,7 @@ void InstructionSelector::translateBlock(const IRBasicBlockView & block, bool is
 	}
 
 	if (!isEntryBlock) {
-		asmFunction.emitLabel(labelName(block.raw()));
+		machineFunction.createBlock(labelName(block.raw()));
 	}
 
 	for (const auto & inst: block.instructions()) {
@@ -129,28 +130,41 @@ void InstructionSelector::translateEntry()
 {
 	const int frameSize = frameLayout.frameSize();
 	if (frameSize > 0) {
-		asmFunction.emitOp("addi", {AsmOperand::reg(REG_SP), AsmOperand::reg(REG_SP), AsmOperand::immValue(-frameSize)});
+		machineFunction.emit(
+			MachineOpcode::ADDI,
+			{MachineOperand::pregDef(PhysicalReg::SP),
+			 MachineOperand::pregUse(PhysicalReg::SP),
+			 MachineOperand::immValue(-frameSize)});
 	}
 
-	asmFunction.emitOp(
-		"sd",
-		{AsmOperand::reg(REG_RA), AsmOperand::mem(REG_SP, frameSize + FunctionFrameLayout::savedRaOffset)});
-	asmFunction.emitOp(
-		"sd",
-		{AsmOperand::reg(REG_FP), AsmOperand::mem(REG_SP, frameSize + FunctionFrameLayout::savedFpOffset)});
-	asmFunction.emitOp("addi", {AsmOperand::reg(REG_FP), AsmOperand::reg(REG_SP), AsmOperand::immValue(frameSize)});
+	machineFunction.emit(
+		MachineOpcode::SD,
+		{MachineOperand::pregUse(PhysicalReg::RA),
+		 MachineOperand::mem(PhysicalReg::SP, frameSize + FunctionFrameLayout::savedRaOffset)});
+	machineFunction.emit(
+		MachineOpcode::SD,
+		{MachineOperand::pregUse(PhysicalReg::FP),
+		 MachineOperand::mem(PhysicalReg::SP, frameSize + FunctionFrameLayout::savedFpOffset)});
+	machineFunction.emit(
+		MachineOpcode::ADDI,
+		{MachineOperand::pregDef(PhysicalReg::FP),
+		 MachineOperand::pregUse(PhysicalReg::SP),
+		 MachineOperand::immValue(frameSize)});
 
 	const auto params = function.params();
 	const int maxParamRegs = std::min(static_cast<int>(params.size()), FunctionFrameLayout::argRegCount);
 	for (int index = 0; index < maxParamRegs; ++index) {
-		storeValue(REG_A[index], params[index]);
+		storeValue(MachineOperand::pregUse(REG_A[index]), params[index]);
 	}
 
 	for (std::size_t index = FunctionFrameLayout::argRegCount; index < params.size(); ++index) {
 		const int64_t callerArgOffset =
 			static_cast<int64_t>((index - FunctionFrameLayout::argRegCount) * FunctionFrameLayout::stackSlotSize);
-		asmFunction.emitOp(loadOpcode(params[index].type()), {AsmOperand::reg(REG_T0), AsmOperand::mem(REG_FP, callerArgOffset)});
-		storeValue(REG_T0, params[index]);
+		auto tmp = newVRegDef();
+		machineFunction.emit(
+			loadOpcode(params[index].type()),
+			{tmp, MachineOperand::mem(PhysicalReg::FP, callerArgOffset)});
+		storeValue(tmp.asUse(), params[index]);
 	}
 }
 
@@ -165,8 +179,9 @@ void InstructionSelector::translateLoad(const IRInstView & inst)
 		return;
 	}
 
-	loadFromPointer(inst.operand(0), inst.type(), REG_T0);
-	storeValue(REG_T0, inst.result());
+	auto tmp = newVRegDef();
+	loadFromPointer(inst.operand(0), inst.type(), tmp);
+	storeValue(tmp.asUse(), inst.result());
 }
 
 void InstructionSelector::translateStore(const IRInstView & inst)
@@ -177,8 +192,8 @@ void InstructionSelector::translateStore(const IRInstView & inst)
 
 	const IRValueView value = inst.operand(0);
 	const IRValueView ptr = inst.operand(1);
-	loadValue(value, REG_T0);
-	storeToPointer(REG_T0, ptr, value.type());
+	auto tmp = loadValue(value);
+	storeToPointer(tmp.asUse(), ptr, value.type());
 }
 
 void InstructionSelector::translateBinary(const IRInstView & inst)
@@ -188,31 +203,32 @@ void InstructionSelector::translateBinary(const IRInstView & inst)
 		return;
 	}
 
-	const char * opcode = "addw";
+	MachineOpcode opcode = MachineOpcode::ADDW;
 	switch (binaryInst->getBinaryOp()) {
 		case BinaryInst::Op::Add:
-			opcode = "addw";
+			opcode = MachineOpcode::ADDW;
 			break;
 		case BinaryInst::Op::Sub:
-			opcode = "subw";
+			opcode = MachineOpcode::SUBW;
 			break;
 		case BinaryInst::Op::Mul:
-			opcode = "mulw";
+			opcode = MachineOpcode::MULW;
 			break;
 		case BinaryInst::Op::SDiv:
-			opcode = "divw";
+			opcode = MachineOpcode::DIVW;
 			break;
 		case BinaryInst::Op::SRem:
-			opcode = "remw";
+			opcode = MachineOpcode::REMW;
 			break;
 		default:
 			return;
 	}
 
-	loadValue(inst.operand(0), REG_T0);
-	loadValue(inst.operand(1), REG_T1);
-	asmFunction.emitOp(opcode, {AsmOperand::reg(REG_T2), AsmOperand::reg(REG_T0), AsmOperand::reg(REG_T1)});
-	storeValue(REG_T2, inst.result());
+	auto lhs = loadValue(inst.operand(0));
+	auto rhs = loadValue(inst.operand(1));
+	auto result = newVRegDef();
+	machineFunction.emit(opcode, {result, lhs.asUse(), rhs.asUse()});
+	storeValue(result.asUse(), inst.result());
 }
 
 void InstructionSelector::translateICmp(const IRInstView & inst)
@@ -222,35 +238,36 @@ void InstructionSelector::translateICmp(const IRInstView & inst)
 		return;
 	}
 
-	loadValue(inst.operand(0), REG_T0);
-	loadValue(inst.operand(1), REG_T1);
+	auto lhs = loadValue(inst.operand(0));
+	auto rhs = loadValue(inst.operand(1));
+	auto result = newVRegDef();
 
 	switch (cmpInst->getPredicate()) {
 		case ICmpInst::Predicate::EQ:
-			asmFunction.emitOp("xor", {AsmOperand::reg(REG_T2), AsmOperand::reg(REG_T0), AsmOperand::reg(REG_T1)});
-			asmFunction.emitOp("seqz", {AsmOperand::reg(REG_T2), AsmOperand::reg(REG_T2)});
+			machineFunction.emit(MachineOpcode::XOR, {result, lhs.asUse(), rhs.asUse()});
+			machineFunction.emit(MachineOpcode::SEQZ, {result.asDef(), result.asUse()});
 			break;
 		case ICmpInst::Predicate::NE:
-			asmFunction.emitOp("xor", {AsmOperand::reg(REG_T2), AsmOperand::reg(REG_T0), AsmOperand::reg(REG_T1)});
-			asmFunction.emitOp("snez", {AsmOperand::reg(REG_T2), AsmOperand::reg(REG_T2)});
+			machineFunction.emit(MachineOpcode::XOR, {result, lhs.asUse(), rhs.asUse()});
+			machineFunction.emit(MachineOpcode::SNEZ, {result.asDef(), result.asUse()});
 			break;
 		case ICmpInst::Predicate::SLT:
-			asmFunction.emitOp("slt", {AsmOperand::reg(REG_T2), AsmOperand::reg(REG_T0), AsmOperand::reg(REG_T1)});
+			machineFunction.emit(MachineOpcode::SLT, {result, lhs.asUse(), rhs.asUse()});
 			break;
 		case ICmpInst::Predicate::SGT:
-			asmFunction.emitOp("slt", {AsmOperand::reg(REG_T2), AsmOperand::reg(REG_T1), AsmOperand::reg(REG_T0)});
+			machineFunction.emit(MachineOpcode::SLT, {result, rhs.asUse(), lhs.asUse()});
 			break;
 		case ICmpInst::Predicate::SLE:
-			asmFunction.emitOp("slt", {AsmOperand::reg(REG_T2), AsmOperand::reg(REG_T1), AsmOperand::reg(REG_T0)});
-			asmFunction.emitOp("xori", {AsmOperand::reg(REG_T2), AsmOperand::reg(REG_T2), AsmOperand::immValue(1)});
+			machineFunction.emit(MachineOpcode::SLT, {result, rhs.asUse(), lhs.asUse()});
+			machineFunction.emit(MachineOpcode::XORI, {result.asDef(), result.asUse(), MachineOperand::immValue(1)});
 			break;
 		case ICmpInst::Predicate::SGE:
-			asmFunction.emitOp("slt", {AsmOperand::reg(REG_T2), AsmOperand::reg(REG_T0), AsmOperand::reg(REG_T1)});
-			asmFunction.emitOp("xori", {AsmOperand::reg(REG_T2), AsmOperand::reg(REG_T2), AsmOperand::immValue(1)});
+			machineFunction.emit(MachineOpcode::SLT, {result, lhs.asUse(), rhs.asUse()});
+			machineFunction.emit(MachineOpcode::XORI, {result.asDef(), result.asUse(), MachineOperand::immValue(1)});
 			break;
 	}
 
-	storeValue(REG_T2, inst.result());
+	storeValue(result.asUse(), inst.result());
 }
 
 void InstructionSelector::translateZExt(const IRInstView & inst)
@@ -259,9 +276,9 @@ void InstructionSelector::translateZExt(const IRInstView & inst)
 		return;
 	}
 
-	loadValue(inst.operand(0), REG_T0);
-	asmFunction.emitOp("andi", {AsmOperand::reg(REG_T0), AsmOperand::reg(REG_T0), AsmOperand::immValue(1)});
-	storeValue(REG_T0, inst.result());
+	auto value = loadValue(inst.operand(0));
+	machineFunction.emit(MachineOpcode::ANDI, {value.asDef(), value.asUse(), MachineOperand::immValue(1)});
+	storeValue(value.asUse(), inst.result());
 }
 
 void InstructionSelector::translateGEP(const IRInstView & inst)
@@ -271,8 +288,9 @@ void InstructionSelector::translateGEP(const IRInstView & inst)
 		return;
 	}
 
+	auto address = newVRegDef();
 	IRValueView base(gepInst->getBasePointer());
-	loadAddress(base, REG_T0);
+	loadAddress(base, address);
 
 	Type * currentType = pointeeType(base.raw());
 	const auto indices = gepInst->getIndices();
@@ -290,18 +308,21 @@ void InstructionSelector::translateGEP(const IRInstView & inst)
 		if (indexValue.isConstantInt()) {
 			const int32_t offset = indexValue.intValue() * scale;
 			if (offset != 0) {
-				asmFunction.emitOp("addi", {AsmOperand::reg(REG_T0), AsmOperand::reg(REG_T0), AsmOperand::immValue(offset)});
+				machineFunction.emit(
+					MachineOpcode::ADDI,
+					{address.asDef(), address.asUse(), MachineOperand::immValue(offset)});
 			}
 			continue;
 		}
 
-		loadValue(indexValue, REG_T1);
-		asmFunction.emitOp("li", {AsmOperand::reg(REG_T2), AsmOperand::immValue(scale)});
-		asmFunction.emitOp("mul", {AsmOperand::reg(REG_T1), AsmOperand::reg(REG_T1), AsmOperand::reg(REG_T2)});
-		asmFunction.emitOp("add", {AsmOperand::reg(REG_T0), AsmOperand::reg(REG_T0), AsmOperand::reg(REG_T1)});
+		auto indexReg = loadValue(indexValue);
+		auto scaleReg = newVRegDef();
+		machineFunction.emit(MachineOpcode::LI, {scaleReg, MachineOperand::immValue(scale)});
+		machineFunction.emit(MachineOpcode::MUL, {indexReg.asDef(), indexReg.asUse(), scaleReg.asUse()});
+		machineFunction.emit(MachineOpcode::ADD, {address.asDef(), address.asUse(), indexReg.asUse()});
 	}
 
-	storeValue(REG_T0, inst.result());
+	storeValue(address.asUse(), inst.result());
 }
 
 void InstructionSelector::translateCall(const IRInstView & inst)
@@ -310,163 +331,216 @@ void InstructionSelector::translateCall(const IRInstView & inst)
 	const std::size_t regArgCount = std::min<std::size_t>(argCount, FunctionFrameLayout::argRegCount);
 
 	for (std::size_t index = 0; index < regArgCount; ++index) {
-		loadValue(inst.operand(index), REG_A[index]);
+		auto arg = loadValue(inst.operand(index));
+		machineFunction.emit(MachineOpcode::COPY, {MachineOperand::pregDef(REG_A[index]), arg.asUse()});
 	}
 
 	for (std::size_t index = regArgCount; index < argCount; ++index) {
-		loadValue(inst.operand(index), REG_T0);
-		asmFunction.emitOp(
-			"sd",
-			{AsmOperand::reg(REG_T0),
-			 AsmOperand::mem(REG_SP, static_cast<int64_t>((index - regArgCount) * FunctionFrameLayout::stackSlotSize))});
+		auto arg = loadValue(inst.operand(index));
+		machineFunction.emit(
+			MachineOpcode::SD,
+			{arg.asUse(),
+			 MachineOperand::mem(
+				 PhysicalReg::SP,
+				 static_cast<int64_t>((index - regArgCount) * FunctionFrameLayout::stackSlotSize))});
 	}
 
-	asmFunction.emitOp("call", {AsmOperand::symbol(inst.calledFunctionName())});
+	auto call = MachineInstr::make(MachineOpcode::CALL, {MachineOperand::functionSymbol(inst.calledFunctionName())});
+	call.implicitDefs = {
+		PhysicalReg::RA,
+		PhysicalReg::A0,
+		PhysicalReg::A1,
+		PhysicalReg::A2,
+		PhysicalReg::A3,
+		PhysicalReg::A4,
+		PhysicalReg::A5,
+		PhysicalReg::A6,
+		PhysicalReg::A7,
+		PhysicalReg::T0,
+		PhysicalReg::T1,
+		PhysicalReg::T2,
+		PhysicalReg::T3,
+		PhysicalReg::T4,
+		PhysicalReg::T5,
+		PhysicalReg::T6,
+	};
+	machineFunction.currentBlock()->emit(call);
 
 	if (inst.hasResult()) {
-		storeValue(REG_A[0], inst.result());
+		storeValue(MachineOperand::pregUse(PhysicalReg::A0), inst.result());
 	}
 }
 
 void InstructionSelector::translateBranch(const IRInstView & inst)
 {
 	if (!inst.isConditionalBranch()) {
-		asmFunction.emitOp("j", {AsmOperand::label(labelName(inst.targetBlockRaw()))});
+		machineFunction.emit(MachineOpcode::J, {MachineOperand::blockLabel(labelName(inst.targetBlockRaw()))});
 		return;
 	}
 
-	loadValue(inst.operand(0), REG_T0);
-	asmFunction.emitOp("bnez", {AsmOperand::reg(REG_T0), AsmOperand::label(labelName(inst.trueBlockRaw()))});
-	asmFunction.emitOp("j", {AsmOperand::label(labelName(inst.falseBlockRaw()))});
+	auto cond = loadValue(inst.operand(0));
+	machineFunction.emit(MachineOpcode::BNEZ, {cond.asUse(), MachineOperand::blockLabel(labelName(inst.trueBlockRaw()))});
+	machineFunction.emit(MachineOpcode::J, {MachineOperand::blockLabel(labelName(inst.falseBlockRaw()))});
 }
 
 void InstructionSelector::translateReturn(const IRInstView & inst)
 {
 	if (inst.operandCount() > 0) {
-		loadValue(inst.operand(0), REG_A[0]);
+		auto value = loadValue(inst.operand(0));
+		machineFunction.emit(MachineOpcode::COPY, {MachineOperand::pregDef(PhysicalReg::A0), value.asUse()});
 	}
 
-	asmFunction.emitOp("ld", {AsmOperand::reg(REG_RA), AsmOperand::mem(REG_FP, FunctionFrameLayout::savedRaOffset)});
-	asmFunction.emitOp("ld", {AsmOperand::reg(REG_T0), AsmOperand::mem(REG_FP, FunctionFrameLayout::savedFpOffset)});
-	asmFunction.emitOp("mv", {AsmOperand::reg(REG_SP), AsmOperand::reg(REG_FP)});
-	asmFunction.emitOp("mv", {AsmOperand::reg(REG_FP), AsmOperand::reg(REG_T0)});
-	asmFunction.emitOp("ret");
+	auto oldFp = newVRegDef();
+	machineFunction.emit(
+		MachineOpcode::LD,
+		{MachineOperand::pregDef(PhysicalReg::RA),
+		 MachineOperand::mem(PhysicalReg::FP, FunctionFrameLayout::savedRaOffset)});
+	machineFunction.emit(
+		MachineOpcode::LD,
+		{oldFp, MachineOperand::mem(PhysicalReg::FP, FunctionFrameLayout::savedFpOffset)});
+	machineFunction.emit(
+		MachineOpcode::COPY,
+		{MachineOperand::pregDef(PhysicalReg::SP), MachineOperand::pregUse(PhysicalReg::FP)});
+	machineFunction.emit(
+		MachineOpcode::COPY,
+		{MachineOperand::pregDef(PhysicalReg::FP), oldFp.asUse()});
+	machineFunction.emit(MachineOpcode::RET);
 }
 
-void InstructionSelector::loadValue(const IRValueView & value, const std::string & reg)
+MachineOperand InstructionSelector::newVRegDef()
+{
+	return MachineOperand::vregDef(machineFunction.createVirtualReg(RegisterClass::GPR));
+}
+
+MachineOperand InstructionSelector::loadValue(const IRValueView & value)
+{
+	auto dst = newVRegDef();
+	loadValueTo(value, dst);
+	return dst;
+}
+
+void InstructionSelector::loadValueTo(const IRValueView & value, const MachineOperand & dst)
 {
 	if (!value.valid()) {
-		asmFunction.emitOp("mv", {AsmOperand::reg(reg), AsmOperand::reg(REG_ZERO)});
+		machineFunction.emit(MachineOpcode::COPY, {dst.asDef(), MachineOperand::pregUse(PhysicalReg::Zero)});
 		return;
 	}
 
 	if (value.isConstantInt()) {
-		asmFunction.emitOp("li", {AsmOperand::reg(reg), AsmOperand::immValue(value.intValue())});
+		machineFunction.emit(MachineOpcode::LI, {dst.asDef(), MachineOperand::immValue(value.intValue())});
 		return;
 	}
 
 	if (dynamic_cast<AllocaInst *>(value.raw()) != nullptr) {
-		loadAddress(value, reg);
+		loadAddress(value, dst);
 		return;
 	}
 
 	if (value.isGlobalVariable()) {
-		loadAddressOfGlobal(value, REG_T3);
-		asmFunction.emitOp(loadOpcode(value.type()), {AsmOperand::reg(reg), AsmOperand::mem(REG_T3, 0)});
+		auto address = newVRegDef();
+		loadAddressOfGlobal(value, address);
+		machineFunction.emit(loadOpcode(value.type()), {dst.asDef(), MachineOperand::memVReg(address.vreg, 0)});
 		return;
 	}
 
 	const auto * slot = slotOf(value);
 	if (slot != nullptr) {
-		asmFunction.emitOp(loadOpcode(value.type()), {AsmOperand::reg(reg), AsmOperand::mem(REG_FP, slot->offset)});
+		(void) slot;
+		machineFunction.emit(loadOpcode(value.type()), {dst.asDef(), MachineOperand::stackSlot(value.raw())});
 	}
 }
 
-void InstructionSelector::storeValue(const std::string & reg, const IRValueView & value)
+void InstructionSelector::storeValue(const MachineOperand & src, const IRValueView & value)
 {
 	if (!value.valid()) {
 		return;
 	}
 
 	if (value.isGlobalVariable()) {
-		loadAddressOfGlobal(value, REG_T3);
-		asmFunction.emitOp(storeOpcode(value.type()), {AsmOperand::reg(reg), AsmOperand::mem(REG_T3, 0)});
+		auto address = newVRegDef();
+		loadAddressOfGlobal(value, address);
+		machineFunction.emit(storeOpcode(value.type()), {src.asUse(), MachineOperand::memVReg(address.vreg, 0)});
 		return;
 	}
 
 	const auto * slot = slotOf(value);
 	if (slot != nullptr) {
-		asmFunction.emitOp(storeOpcode(value.type()), {AsmOperand::reg(reg), AsmOperand::mem(REG_FP, slot->offset)});
+		(void) slot;
+		machineFunction.emit(storeOpcode(value.type()), {src.asUse(), MachineOperand::stackSlot(value.raw())});
 	}
 }
 
-void InstructionSelector::loadAddress(const IRValueView & value, const std::string & reg)
+void InstructionSelector::loadAddress(const IRValueView & value, const MachineOperand & dst)
 {
 	if (!value.valid()) {
-		asmFunction.emitOp("mv", {AsmOperand::reg(reg), AsmOperand::reg(REG_ZERO)});
+		machineFunction.emit(MachineOpcode::COPY, {dst.asDef(), MachineOperand::pregUse(PhysicalReg::Zero)});
 		return;
 	}
 
 	if (value.isGlobalVariable()) {
-		loadAddressOfGlobal(value, reg);
+		loadAddressOfGlobal(value, dst);
 		return;
 	}
 
-	auto * allocaInst = dynamic_cast<AllocaInst *>(value.raw());
-	if (allocaInst != nullptr) {
+	if (dynamic_cast<AllocaInst *>(value.raw()) != nullptr) {
 		const auto * slot = slotOf(value);
 		if (slot != nullptr) {
-			asmFunction.emitOp("addi", {AsmOperand::reg(reg), AsmOperand::reg(REG_FP), AsmOperand::immValue(slot->offset)});
+			(void) slot;
+			machineFunction.emit(MachineOpcode::LA_STACK, {dst.asDef(), MachineOperand::stackSlot(value.raw())});
 		}
 		return;
 	}
 
-	loadValue(value, reg);
+	loadValueTo(value, dst);
 }
 
-void InstructionSelector::loadFromPointer(const IRValueView & ptr, Type * valueType, const std::string & reg)
+void InstructionSelector::loadFromPointer(const IRValueView & ptr, Type * valueType, const MachineOperand & dst)
 {
 	if (dynamic_cast<AllocaInst *>(ptr.raw()) != nullptr) {
 		const auto * slot = slotOf(ptr);
 		if (slot != nullptr) {
-			asmFunction.emitOp(loadOpcode(valueType), {AsmOperand::reg(reg), AsmOperand::mem(REG_FP, slot->offset)});
+			(void) slot;
+			machineFunction.emit(loadOpcode(valueType), {dst.asDef(), MachineOperand::stackSlot(ptr.raw())});
 		}
 		return;
 	}
 
 	if (ptr.isGlobalVariable()) {
-		loadAddressOfGlobal(ptr, REG_T3);
-		asmFunction.emitOp(loadOpcode(valueType), {AsmOperand::reg(reg), AsmOperand::mem(REG_T3, 0)});
+		auto address = newVRegDef();
+		loadAddressOfGlobal(ptr, address);
+		machineFunction.emit(loadOpcode(valueType), {dst.asDef(), MachineOperand::memVReg(address.vreg, 0)});
 		return;
 	}
 
-	loadValue(ptr, REG_T3);
-	asmFunction.emitOp(loadOpcode(valueType), {AsmOperand::reg(reg), AsmOperand::mem(REG_T3, 0)});
+	auto address = loadValue(ptr);
+	machineFunction.emit(loadOpcode(valueType), {dst.asDef(), MachineOperand::memVReg(address.vreg, 0)});
 }
 
-void InstructionSelector::storeToPointer(const std::string & reg, const IRValueView & ptr, Type * valueType)
+void InstructionSelector::storeToPointer(const MachineOperand & src, const IRValueView & ptr, Type * valueType)
 {
 	if (dynamic_cast<AllocaInst *>(ptr.raw()) != nullptr) {
 		const auto * slot = slotOf(ptr);
 		if (slot != nullptr) {
-			asmFunction.emitOp(storeOpcode(valueType), {AsmOperand::reg(reg), AsmOperand::mem(REG_FP, slot->offset)});
+			(void) slot;
+			machineFunction.emit(storeOpcode(valueType), {src.asUse(), MachineOperand::stackSlot(ptr.raw())});
 		}
 		return;
 	}
 
 	if (ptr.isGlobalVariable()) {
-		loadAddressOfGlobal(ptr, REG_T3);
-		asmFunction.emitOp(storeOpcode(valueType), {AsmOperand::reg(reg), AsmOperand::mem(REG_T3, 0)});
+		auto address = newVRegDef();
+		loadAddressOfGlobal(ptr, address);
+		machineFunction.emit(storeOpcode(valueType), {src.asUse(), MachineOperand::memVReg(address.vreg, 0)});
 		return;
 	}
 
-	loadValue(ptr, REG_T3);
-	asmFunction.emitOp(storeOpcode(valueType), {AsmOperand::reg(reg), AsmOperand::mem(REG_T3, 0)});
+	auto address = loadValue(ptr);
+	machineFunction.emit(storeOpcode(valueType), {src.asUse(), MachineOperand::memVReg(address.vreg, 0)});
 }
 
-void InstructionSelector::loadAddressOfGlobal(const IRValueView & value, const std::string & reg)
+void InstructionSelector::loadAddressOfGlobal(const IRValueView & value, const MachineOperand & dst)
 {
-	asmFunction.emitOp("la", {AsmOperand::reg(reg), AsmOperand::symbol(value.name())});
+	machineFunction.emit(MachineOpcode::LA, {dst.asDef(), MachineOperand::globalSymbol(value.name())});
 }
 
 std::string InstructionSelector::labelName(BasicBlock * block)
@@ -503,12 +577,12 @@ bool InstructionSelector::isEightByteType(Type * type) const
 	return type != nullptr && (type->isPointerType() || type->getSize() > 4);
 }
 
-std::string InstructionSelector::loadOpcode(Type * type) const
+MachineOpcode InstructionSelector::loadOpcode(Type * type) const
 {
-	return isEightByteType(type) ? "ld" : "lw";
+	return isEightByteType(type) ? MachineOpcode::LD : MachineOpcode::LW;
 }
 
-std::string InstructionSelector::storeOpcode(Type * type) const
+MachineOpcode InstructionSelector::storeOpcode(Type * type) const
 {
-	return isEightByteType(type) ? "sd" : "sw";
+	return isEightByteType(type) ? MachineOpcode::SD : MachineOpcode::SW;
 }
