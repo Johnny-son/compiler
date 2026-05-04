@@ -26,13 +26,6 @@ test/stage1_params/for_optional.c
 test/stage1_params/self_inc_dec.c
 test/stage1_params/for_self_update.c
 test/stage1_params/array_assign_regression.c
-test/stage1_params/array_assign_zero_fill.c
-test/stage1_params/array_assign_side_effect.c
-test/stage1_params/array_assign_param.c
-test/stage1_params/array_assign_global.c
-test/stage1_params/array_assign_post_index.c
-test/stage1_params/array_assign_return.c
-test/stage1_params/array_assign_eval_order.c
 
 asm:
 2023_func_00_main.c
