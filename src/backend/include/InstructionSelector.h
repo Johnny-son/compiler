@@ -27,6 +27,7 @@ private:
 	void translateZExt(const IRInstView & inst);
 	void translateGEP(const IRInstView & inst);
 	void translateCall(const IRInstView & inst);
+	void translatePhi(const IRInstView & inst);
 	void translateBranch(const IRInstView & inst);
 	void translateReturn(const IRInstView & inst);
 
@@ -38,6 +39,9 @@ private:
 	void loadFromPointer(const IRValueView & ptr, Type * valueType, const MachineOperand & dst);
 	void storeToPointer(const MachineOperand & src, const IRValueView & ptr, Type * valueType);
 	void loadAddressOfGlobal(const IRValueView & value, const MachineOperand & dst);
+	bool hasPhiCopiesForEdge(BasicBlock * successor, BasicBlock * predecessor) const;
+	void emitPhiCopies(BasicBlock * successor, BasicBlock * predecessor);
+	std::string edgeCopyLabel(BasicBlock * from, BasicBlock * to);
 
 	std::string labelName(BasicBlock * block);
 	const StackSlotInfo * slotOf(const IRValueView & value) const;
@@ -50,5 +54,6 @@ private:
 	const FunctionFrameLayout & frameLayout;
 	MachineFunction machineFunction;
 	std::unordered_map<BasicBlock *, std::string> blockLabels;
+	BasicBlock * currentIRBlock = nullptr;
 	int nextLabelIndex = 0;
 };

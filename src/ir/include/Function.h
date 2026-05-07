@@ -53,6 +53,9 @@ public:
 	BasicBlock * getEntryBlock() const;
 
 	/// @brief 获取基本块列表
+	std::vector<BasicBlock *> & getBasicBlocks();
+
+	/// @brief 获取基本块列表
 	const std::vector<BasicBlock *> & getBasicBlocks() const;
 
 	/// @brief 分配函数内唯一的LLVM局部名字

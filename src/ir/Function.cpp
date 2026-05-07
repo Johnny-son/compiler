@@ -3,9 +3,28 @@
 #include <cctype>
 #include <cstddef>
 #include <string>
+#include <unordered_set>
 
 #include "Function.h"
 #include "BasicBlock.h"
+#include "Instruction.h"
+
+namespace {
+
+bool isNumberedLocalName(const std::string & name)
+{
+	if (name.size() < 2 || name[0] != '%') {
+		return false;
+	}
+	for (std::size_t index = 1; index < name.size(); ++index) {
+		if (!std::isdigit(static_cast<unsigned char>(name[index]))) {
+			return false;
+		}
+	}
+	return true;
+}
+
+} // namespace
 
 Function::Function(std::string _name, FunctionType * _type, bool _builtin)
 	: GlobalValue(_type, _name), returnType(_type->getReturnType()), builtIn(_builtin)
@@ -88,6 +107,11 @@ BasicBlock * Function::getEntryBlock() const
 	return basicBlocks.empty() ? nullptr : basicBlocks.front();
 }
 
+std::vector<BasicBlock *> & Function::getBasicBlocks()
+{
+	return basicBlocks;
+}
+
 const std::vector<BasicBlock *> & Function::getBasicBlocks() const
 {
 	return basicBlocks;
@@ -142,5 +166,44 @@ void Function::Delete()
 
 void Function::renameIR()
 {
-	// 新 MiniLLVM 路径在构造指令时已经完成命名。
+	std::unordered_set<std::string> reservedNames;
+	for (auto * param: params) {
+		const std::string name = param != nullptr ? param->getIRName() : "";
+		if (!name.empty() && !isNumberedLocalName(name)) {
+			reservedNames.insert(name);
+		}
+	}
+
+	for (auto * block: basicBlocks) {
+		for (auto * inst: block->getInstructions()) {
+			if (inst == nullptr || !inst->hasResultValue()) {
+				continue;
+			}
+			const std::string name = inst->getIRName();
+			if (!name.empty() && !isNumberedLocalName(name)) {
+				reservedNames.insert(name);
+			}
+		}
+	}
+
+	int32_t nextNumber = 0;
+	auto nextAvailableName = [&]() {
+		std::string candidate;
+		do {
+			candidate = "%" + std::to_string(nextNumber++);
+		} while (reservedNames.find(candidate) != reservedNames.end());
+		return candidate;
+	};
+
+	for (auto * block: basicBlocks) {
+		for (auto * inst: block->getInstructions()) {
+			if (inst == nullptr || !inst->hasResultValue()) {
+				continue;
+			}
+			const std::string name = inst->getIRName();
+			if (name.empty() || isNumberedLocalName(name)) {
+				inst->setIRName(nextAvailableName());
+			}
+		}
+	}
 }

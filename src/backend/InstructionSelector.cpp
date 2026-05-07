@@ -11,6 +11,7 @@
 #include "ir/Instructions/BinaryInst.h"
 #include "ir/Instructions/GetElementPtrInst.h"
 #include "ir/Instructions/ICmpInst.h"
+#include "ir/Instructions/PhiInst.h"
 #include "ir/Types/ArrayType.h"
 #include "ir/Types/PointerType.h"
 
@@ -83,6 +84,7 @@ void InstructionSelector::translateBlock(const IRBasicBlockView & block, bool is
 		machineFunction.createBlock(labelName(block.raw()));
 	}
 
+	currentIRBlock = block.raw();
 	for (const auto & inst: block.instructions()) {
 		translateInst(inst);
 	}
@@ -114,6 +116,9 @@ void InstructionSelector::translateInst(const IRInstView & inst)
 			break;
 		case IRInstKind::Call:
 			translateCall(inst);
+			break;
+		case IRInstKind::Phi:
+			translatePhi(inst);
 			break;
 		case IRInstKind::Branch:
 			translateBranch(inst);
@@ -371,16 +376,36 @@ void InstructionSelector::translateCall(const IRInstView & inst)
 	}
 }
 
+void InstructionSelector::translatePhi(const IRInstView &)
+{
+	// Phi copies are emitted on incoming control-flow edges in translateBranch().
+}
+
 void InstructionSelector::translateBranch(const IRInstView & inst)
 {
 	if (!inst.isConditionalBranch()) {
+		emitPhiCopies(inst.targetBlockRaw(), currentIRBlock);
 		machineFunction.emit(MachineOpcode::J, {MachineOperand::blockLabel(labelName(inst.targetBlockRaw()))});
 		return;
 	}
 
+	BasicBlock * trueTarget = inst.trueBlockRaw();
+	BasicBlock * falseTarget = inst.falseBlockRaw();
+	const bool trueNeedsCopies = hasPhiCopiesForEdge(trueTarget, currentIRBlock);
+	const std::string trueLabel = trueNeedsCopies ? edgeCopyLabel(currentIRBlock, trueTarget) : labelName(trueTarget);
+
 	auto cond = loadValue(inst.operand(0));
-	machineFunction.emit(MachineOpcode::BNEZ, {cond.asUse(), MachineOperand::blockLabel(labelName(inst.trueBlockRaw()))});
-	machineFunction.emit(MachineOpcode::J, {MachineOperand::blockLabel(labelName(inst.falseBlockRaw()))});
+	machineFunction.emit(MachineOpcode::BNEZ, {cond.asUse(), MachineOperand::blockLabel(trueLabel)});
+
+	// The false edge is the fall-through path after BNEZ, so its copies can be emitted inline.
+	emitPhiCopies(falseTarget, currentIRBlock);
+	machineFunction.emit(MachineOpcode::J, {MachineOperand::blockLabel(labelName(falseTarget))});
+
+	if (trueNeedsCopies) {
+		machineFunction.createBlock(trueLabel);
+		emitPhiCopies(trueTarget, currentIRBlock);
+		machineFunction.emit(MachineOpcode::J, {MachineOperand::blockLabel(labelName(trueTarget))});
+	}
 }
 
 void InstructionSelector::translateReturn(const IRInstView & inst)
@@ -541,6 +566,67 @@ void InstructionSelector::storeToPointer(const MachineOperand & src, const IRVal
 void InstructionSelector::loadAddressOfGlobal(const IRValueView & value, const MachineOperand & dst)
 {
 	machineFunction.emit(MachineOpcode::LA, {dst.asDef(), MachineOperand::globalSymbol(value.name())});
+}
+
+bool InstructionSelector::hasPhiCopiesForEdge(BasicBlock * successor, BasicBlock * predecessor) const
+{
+	if (successor == nullptr || predecessor == nullptr) {
+		return false;
+	}
+
+	for (auto * inst: successor->getInstructions()) {
+		auto * phi = dynamic_cast<PhiInst *>(inst);
+		if (phi == nullptr) {
+			break;
+		}
+		for (const auto & incoming: phi->getIncomingValues()) {
+			if (incoming.second == predecessor) {
+				return true;
+			}
+		}
+	}
+
+	return false;
+}
+
+void InstructionSelector::emitPhiCopies(BasicBlock * successor, BasicBlock * predecessor)
+{
+	if (successor == nullptr || predecessor == nullptr) {
+		return;
+	}
+
+	std::vector<std::pair<Value *, MachineOperand>> copies;
+	for (auto * inst: successor->getInstructions()) {
+		auto * phi = dynamic_cast<PhiInst *>(inst);
+		if (phi == nullptr) {
+			break;
+		}
+
+		for (const auto & incoming: phi->getIncomingValues()) {
+			if (incoming.second != predecessor) {
+				continue;
+			}
+			// Load every source before writing any destination: phi lowering is a parallel copy.
+			copies.emplace_back(phi, loadValue(IRValueView(incoming.first)).asUse());
+			break;
+		}
+	}
+
+	for (const auto & copy: copies) {
+		storeValue(copy.second, IRValueView(copy.first));
+	}
+}
+
+std::string InstructionSelector::edgeCopyLabel(BasicBlock * from, BasicBlock * to)
+{
+	std::string label = ".L_" + sanitizeLabelPart(function.name()) + "_phi_edge_" + std::to_string(nextLabelIndex++);
+	if (from != nullptr) {
+		label += "_" + sanitizeLabelPart(from->getIRName());
+	}
+	if (to != nullptr) {
+		label += "_to_" + sanitizeLabelPart(to->getIRName());
+	}
+	return label;
 }
 
 std::string InstructionSelector::labelName(BasicBlock * block)

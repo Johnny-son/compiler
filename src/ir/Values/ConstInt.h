@@ -20,6 +20,12 @@ public:
 		intVal = val;
 	}
 
+	ConstInt(int32_t val, IntegerType * type) : Constant(type)
+	{
+		name = std::to_string(val);
+		intVal = val;
+	}
+
 	/// @brief 获取名字
 	/// @return 变量名
 	[[nodiscard]] std::string getIRName() const override

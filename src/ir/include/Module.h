@@ -87,6 +87,9 @@ public:
 	// 新建一个整型数值的Value，并加入到符号表，用于后续释放空间
 	ConstInt * newConstInt(int32_t intVal);
 
+	// 新建一个i1布尔常量，用于icmp折叠和条件分支优化
+	ConstInt * newConstBool(bool boolVal);
+
 	// 新建一个float数值的Value
 	ConstFloat * newConstFloat(float floatVal);
 
@@ -171,5 +174,6 @@ private:
 
 	// 常量表
 	std::unordered_map<int32_t, ConstInt *> constIntMap;
+	std::unordered_map<int32_t, ConstInt *> constBoolMap;
 	std::unordered_map<float, ConstFloat *> constFloatMap;
 };

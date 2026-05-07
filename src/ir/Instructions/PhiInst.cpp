@@ -16,6 +16,39 @@ void PhiInst::addIncoming(Value * value, BasicBlock * block)
 	addOperand(value);
 }
 
+bool PhiInst::removeIncomingFrom(BasicBlock * block)
+{
+	bool changed = false;
+	for (int index = static_cast<int>(incomingValues.size()) - 1; index >= 0; --index) {
+		if (incomingValues[static_cast<std::size_t>(index)].second != block) {
+			continue;
+		}
+
+		removeOperand(index);
+		incomingValues.erase(incomingValues.begin() + index);
+		changed = true;
+	}
+	return changed;
+}
+
+void PhiInst::replaceIncomingBlock(BasicBlock * oldBlock, BasicBlock * newBlock)
+{
+	for (auto & incoming: incomingValues) {
+		if (incoming.second == oldBlock) {
+			incoming.second = newBlock;
+		}
+	}
+}
+
+void PhiInst::replaceIncomingValue(Value * oldValue, Value * newValue)
+{
+	for (auto & incoming: incomingValues) {
+		if (incoming.first == oldValue) {
+			incoming.first = newValue;
+		}
+	}
+}
+
 const std::vector<std::pair<Value *, BasicBlock *>> & PhiInst::getIncomingValues() const
 {
 	return incomingValues;

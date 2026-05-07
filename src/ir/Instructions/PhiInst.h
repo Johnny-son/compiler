@@ -14,6 +14,9 @@ public:
 	PhiInst(Function * func, Type * type, const std::string & name = "");
 
 	void addIncoming(Value * value, BasicBlock * block);
+	bool removeIncomingFrom(BasicBlock * block);
+	void replaceIncomingBlock(BasicBlock * oldBlock, BasicBlock * newBlock);
+	void replaceIncomingValue(Value * oldValue, Value * newValue);
 	const std::vector<std::pair<Value *, BasicBlock *>> & getIncomingValues() const;
 	void toString(std::string & str) override;
 

@@ -236,6 +236,19 @@ ConstInt * Module::newConstInt(int32_t intVal)
 	return val;
 }
 
+ConstInt * Module::newConstBool(bool boolVal)
+{
+	const int32_t key = boolVal ? 1 : 0;
+	auto pIter = constBoolMap.find(key);
+	if (pIter != constBoolMap.end()) {
+		return pIter->second;
+	}
+
+	auto * val = new ConstInt(key, IntegerType::getTypeBool());
+	constBoolMap.emplace(key, val);
+	return val;
+}
+
 /// @brief 根据整数值获取当前符号
 /// \param name 变量名
 /// \return 变量对应的值

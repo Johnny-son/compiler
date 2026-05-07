@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "Value.h"
+#include "ir/Instructions/PhiInst.h"
 #include "Use.h"
 #include "User.h"
 
@@ -208,6 +209,10 @@ void Value::replaceAllUseWith(Value * new_val)
 	for (auto use: uses_copy) {
 		auto user = dynamic_cast<User *>(use->getUser());
 		if (user) {
+			if (auto * phi = dynamic_cast<PhiInst *>(user); phi != nullptr) {
+				phi->replaceIncomingValue(this, new_val);
+			}
+
 			// 找到这个use在user中的索引位置
 			for (int i = 0; i < user->getOperandsNum(); i++) {
 				if (user->getOperand(i) == this) {

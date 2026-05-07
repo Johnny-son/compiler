@@ -7,6 +7,13 @@
 #include "frontend/include/Graph.h"
 #include "ir/include/Module.h"
 #include "ir/include/IRGenerator.h"
+#include "ir/passes/ConstantFoldPass.h"
+#include "ir/passes/DCEPass.h"
+#include "ir/passes/IRPassManager.h"
+#include "ir/passes/Mem2RegPass.h"
+#include "ir/passes/SimplifyCFGPass.h"
+#include "ir/passes/TrivialPhiPass.h"
+#include "ir/passes/VerifyPass.h"
 #include "backend/include/BackendDriver.h"
 
 using namespace std;
@@ -218,6 +225,29 @@ static int compile(string inputFile, string outputFile)
 
 		// 清理抽象语法树
 		ast_node::Delete(astRoot);
+
+		if (gOptLevel > 0) {
+			IRPassManager passManager;
+			passManager.addPass<VerifyPass>();
+			passManager.addPass<SimplifyCFGPass>();
+			passManager.addPass<VerifyPass>();
+			passManager.addPass<Mem2RegPass>();
+			passManager.addPass<VerifyPass>();
+			passManager.addPass<ConstantFoldPass>();
+			passManager.addPass<VerifyPass>();
+			passManager.addPass<SimplifyCFGPass>();
+			passManager.addPass<VerifyPass>();
+			passManager.addPass<TrivialPhiPass>();
+			passManager.addPass<VerifyPass>();
+			passManager.addPass<SimplifyCFGPass>();
+			passManager.addPass<VerifyPass>();
+			passManager.addPass<DCEPass>();
+			passManager.addPass<VerifyPass>();
+			if (!passManager.run(*module)) {
+				Status::Error("编译终止: IR 优化失败");
+				break;
+			}
+		}
 
 		if (gShowLLVMIR) {
 			module->renameIR();  // 对IR的名字重命名
