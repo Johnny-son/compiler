@@ -28,6 +28,10 @@ test/stage1_params/for_self_update.c
 test/stage1_params/array_assign_regression.c
 test/stage1_params/static_local.c
 test/stage1_params/static_func.c
+test/stage1_params/static_local_array.c
+test/stage1_params/static_global.c
+test/stage1_params/static_multi_func.c
+test/stage1_params/static_const.c
 
 asm:
 2023_func_00_main.c
@@ -69,6 +73,8 @@ test/stage1_params/param_global_init_nonconst.c
 test/stage1_params/param_duplicate.c
 test/stage1_params/change_const_var.c
 test/stage1_params/const_not_init.c
+test/stage1_params/static_const_assign.c
+test/stage1_params/static_const_not_init.c
 
 perf:
 # Local only. The 2025 performance inputs are too large for GitHub CI.

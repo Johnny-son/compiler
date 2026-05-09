@@ -1670,7 +1670,13 @@ bool IRGenerator::ir_variable_declare(ast_node * node)
 		GlobalValue::LinkageTypes linkage = node->isStatic ? GlobalValue::InternalLinkage : GlobalValue::ExternalLinkage;
 		if (node->isStatic) {
 			// static 局部变量：绕过 newVarValue（会拒绝函数内调用），直接创建全局变量
-			auto * global_var = module->newGlobalVariable(declaredType, node->sons[1]->name, linkage);
+			// 用函数名做前缀避免不同函数中同名 static 变量冲突
+			std::string globalName = node->sons[1]->name;
+			auto * curFunc = module->getCurrentFunction();
+			if (curFunc != nullptr) {
+				globalName = curFunc->getName() + "." + globalName;
+			}
+			auto * global_var = module->newGlobalVariable(declaredType, globalName, linkage);
 			if (global_var == nullptr) {
 				report_ir_error(
 					"E1302",
