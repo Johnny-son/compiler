@@ -124,7 +124,11 @@ std::any MiniCCSTVisitor::visitFuncDef(MiniCParser::FuncDefContext * ctx)
 
 	// 创建函数定义的节点，孩子有类型，函数名，语句块和形参(实际上无)
 	// create_func_def函数内会释放funcId中指向的标识符空间，切记，之后不要再释放，之前一定要是通过strdup函数或者malloc分配的空间
-	return ast_node::create_func_def(funcReturnType, funcId, blockNode, formalParamsNode);
+	auto * funcDefNode = ast_node::create_func_def(funcReturnType, funcId, blockNode, formalParamsNode);
+	if (ctx->T_STATIC()) {
+		funcDefNode->isStatic = true;
+	}
+	return funcDefNode;
 }
 
 std::any MiniCCSTVisitor::visitFuncType(MiniCParser::FuncTypeContext * ctx)
@@ -848,6 +852,8 @@ std::any MiniCCSTVisitor::visitVarDecl(MiniCParser::VarDeclContext * ctx)
 	// 类型节点
 	type_attr typeAttr = std::any_cast<type_attr>(visitBasicType(ctx->basicType()));
 
+	bool isStatic = ctx->T_STATIC() != nullptr;
+
 	for (auto & varCtx: ctx->varDef()) {
 		// 变量名节点
 		int64_t lineNo = (int64_t) varCtx->T_ID()->getSymbol()->getLine();
@@ -859,6 +865,7 @@ std::any MiniCCSTVisitor::visitVarDecl(MiniCParser::VarDeclContext * ctx)
 		// 创建变量定义节点
 		ast_node * decl_node = ast_node::New(ast_operator_type::AST_OP_VAR_DECL, type_node, id_node);
 		decl_node->type = type_node->type;
+		decl_node->isStatic = isStatic;
 
 		// 数组维度列表，作为类型和名字之后的孩子
 		if (varCtx->arrayDims()) {
@@ -901,6 +908,8 @@ std::any MiniCCSTVisitor::visitConstDecl(MiniCParser::ConstDeclContext * ctx)
 	// 类型节点
 	type_attr typeAttr = std::any_cast<type_attr>(visitBasicType(ctx->basicType()));
 
+	bool isStatic = ctx->T_STATIC() != nullptr;
+
 	for (auto & constCtx: ctx->constDef()) {
 		// 获取行号
 		int64_t lineNo = (int64_t) constCtx->T_ID()->getSymbol()->getLine();
@@ -915,6 +924,7 @@ std::any MiniCCSTVisitor::visitConstDecl(MiniCParser::ConstDeclContext * ctx)
 		ast_node * decl_node = ast_node::New(ast_operator_type::AST_OP_CONST_DECL, type_node, id_node);
 		decl_node->type = type_node->type;
 		decl_node->isConst = true;
+		decl_node->isStatic = isStatic;
 
 		// 数组维度列表，作为类型和名字之后的孩子
 		if (constCtx->arrayDims()) {

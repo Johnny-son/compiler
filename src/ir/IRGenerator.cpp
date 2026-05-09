@@ -328,7 +328,8 @@ bool IRGenerator::predeclare_function(ast_node * node)
 		formalParams.push_back(new FormalParam(paramType, param->name));
 	}
 
-	if (module->newFunction(name_node->name, type_node->type, formalParams) == nullptr) {
+	GlobalValue::LinkageTypes linkage = node->isStatic ? GlobalValue::InternalLinkage : GlobalValue::ExternalLinkage;
+	if (module->newFunction(name_node->name, type_node->type, formalParams, false, linkage) == nullptr) {
 		report_ir_error(
 			"E1102",
 			name_node != nullptr ? name_node->line_no : -1,
@@ -1664,10 +1665,30 @@ bool IRGenerator::ir_variable_declare(ast_node * node)
 	}
 	node->type = declaredType;
 
-	if (module->getCurrentFunction() == nullptr) {
-		node->val = module->newVarValue(declaredType, node->sons[1]->name, node->sons[1]->line_no);
-		if (node->val == nullptr) {
-			return false;
+	if (module->getCurrentFunction() == nullptr || node->isStatic) {
+		// static 局部变量走全局路径：创建 GlobalVariable 而非 AllocaInst
+		GlobalValue::LinkageTypes linkage = node->isStatic ? GlobalValue::InternalLinkage : GlobalValue::ExternalLinkage;
+		if (node->isStatic) {
+			// static 局部变量：绕过 newVarValue（会拒绝函数内调用），直接创建全局变量
+			auto * global_var = module->newGlobalVariable(declaredType, node->sons[1]->name, linkage);
+			if (global_var == nullptr) {
+				report_ir_error(
+					"E1302",
+					node->sons[1] != nullptr ? node->sons[1]->line_no : -1,
+					"变量声明",
+					"static 变量(%s)创建失败",
+					node->sons[1]->name.c_str());
+				return false;
+			}
+			node->val = global_var;
+			if (!module->bindValue(node->sons[1]->name, global_var, node->sons[1]->line_no)) {
+				return false;
+			}
+		} else {
+			node->val = module->newVarValue(declaredType, node->sons[1]->name, node->sons[1]->line_no);
+			if (node->val == nullptr) {
+				return false;
+			}
 		}
 		node->val->setConstValue(node->isConst);
 

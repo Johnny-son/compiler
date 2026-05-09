@@ -43,7 +43,9 @@ bool BackendDriver::run(Module * module, const std::string & outputFile) const
 				emittedBss = true;
 			}
 
-			fprintf(fp, ".globl %s\n", global.name().c_str());
+			if (globalVar->getLinkage() != GlobalValue::InternalLinkage) {
+				fprintf(fp, ".globl %s\n", global.name().c_str());
+			}
 			fprintf(fp, ".balign %d\n", globalVar->getAlignment());
 			fprintf(fp, "%s:\n", global.name().c_str());
 			fprintf(fp, ".zero %d\n", globalVar->getType()->getSize());
@@ -55,7 +57,9 @@ bool BackendDriver::run(Module * module, const std::string & outputFile) const
 			emittedData = true;
 		}
 
-		fprintf(fp, ".globl %s\n", global.name().c_str());
+		if (globalVar->getLinkage() != GlobalValue::InternalLinkage) {
+			fprintf(fp, ".globl %s\n", global.name().c_str());
+		}
 		fprintf(fp, ".balign %d\n", globalVar->getAlignment());
 		fprintf(fp, "%s:\n", global.name().c_str());
 		fprintf(fp, ".word %d\n", globalVar->hasInitializerValue() ? globalVar->getInitializerInt() : 0);
@@ -75,6 +79,10 @@ bool BackendDriver::run(Module * module, const std::string & outputFile) const
 		MachineFunction allocatedFunction = allocator.run(machineFunction);
 		MachineAsmLowering lowering(allocatedFunction, layout);
 		AsmFunction asmFunction = lowering.run();
+		auto * func = dynamic_cast<Function *>(function.raw());
+		if (func && func->getLinkage() == GlobalValue::InternalLinkage) {
+			asmFunction.setInternalLinkage(true);
+		}
 		AsmPrinter::printFunction(fp, asmFunction);
 	}
 

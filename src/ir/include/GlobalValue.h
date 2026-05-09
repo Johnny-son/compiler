@@ -27,6 +27,7 @@
 ///
 class GlobalValue : public Constant {
 
+public:
 	///
 	/// @brief 用于区分函数或变量是否是static，或者外部都可见
 	///
@@ -42,7 +43,7 @@ class GlobalValue : public Constant {
 		ProtectedVisibility	   ///< The GlobalValue is protected
 	};
 
-public:
+
 	///
 	/// @brief 构造函数
 	/// @param _type  类型
@@ -52,6 +53,8 @@ public:
 	{
 		this->name = _name;
 		this->IRName = "@" + this->name;
+		this->linkage = ExternalLinkage;
+		this->visibility = DefaultVisibility;
 	}
 
 	/// @brief 获取名字
@@ -88,6 +91,11 @@ public:
 	[[nodiscard]] LinkageTypes getLinkage() const
 	{
 		return linkage;
+	}
+
+	void setLinkage(LinkageTypes l)
+	{
+		linkage = l;
 	}
 
 	///

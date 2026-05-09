@@ -136,7 +136,8 @@ void Module::setCurrentFunction(Function * current)
 /// @param params 形参列表
 /// @param builtin 是否内置函数
 /// @return 新建的函数对象实例
-Function * Module::newFunction(std::string name, Type * returnType, std::vector<FormalParam *> params, bool builtin)
+Function * Module::newFunction(std::string name, Type * returnType, std::vector<FormalParam *> params, bool builtin,
+                              GlobalValue::LinkageTypes linkage)
 {
 	// 先根据函数名查找函数，若找到则出错
 	Function * tempFunc = findFunction(name);
@@ -163,6 +164,7 @@ Function * Module::newFunction(std::string name, Type * returnType, std::vector<
 
 	// 新建函数对象
 	tempFunc = new Function(name, type, builtin);
+	tempFunc->setLinkage(linkage);
 
 	// 设置参数
 	tempFunc->getParams().assign(params.begin(), params.end());
@@ -373,9 +375,10 @@ Value * Module::lookupValue(const std::string & name) const
 /// @param name 名字
 /// @return Value* 全局变量
 ///
-GlobalVariable * Module::newGlobalVariable(Type * type, std::string name)
+GlobalVariable * Module::newGlobalVariable(Type * type, std::string name, GlobalValue::LinkageTypes linkage)
 {
 	GlobalVariable * val = new GlobalVariable(type, name);
+	val->setLinkage(linkage);
 
 	insertGlobalValueDirectly(val);
 
@@ -465,8 +468,9 @@ std::string Module::toString() const
 		} else {
 			initializer = std::to_string(var->hasInitializerValue() ? var->getInitializerInt() : 0);
 		}
-		str += var->getIRName() + " = global " + var->getType()->toString() + " " + initializer + ", align " +
-			   std::to_string(var->getAlignment()) + "\n";
+		std::string linkageStr = (var->getLinkage() == GlobalValue::InternalLinkage) ? "internal " : "";
+		str += var->getIRName() + " = " + linkageStr + "global " + var->getType()->toString() + " " + initializer +
+			   ", align " + std::to_string(var->getAlignment()) + "\n";
 	}
 
 	if (!globalVariableVector.empty()) {

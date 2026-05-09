@@ -47,6 +47,8 @@ public:
 
 	[[nodiscard]] const std::string & name() const;
 	[[nodiscard]] const std::vector<AsmInstruction> & instructions() const;
+	[[nodiscard]] bool isInternalLinkage() const { return internalLinkage; }
+	void setInternalLinkage(bool v) { internalLinkage = v; }
 
 	void emit(const AsmInstruction & inst);
 	void emitLabel(const std::string & label);
@@ -55,6 +57,7 @@ public:
 private:
 	std::string funcName;
 	std::vector<AsmInstruction> insts;
+	bool internalLinkage = false;
 };
 
 class AsmPrinter {

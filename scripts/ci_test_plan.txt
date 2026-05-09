@@ -26,6 +26,8 @@ test/stage1_params/for_optional.c
 test/stage1_params/self_inc_dec.c
 test/stage1_params/for_self_update.c
 test/stage1_params/array_assign_regression.c
+test/stage1_params/static_local.c
+test/stage1_params/static_func.c
 
 asm:
 2023_func_00_main.c

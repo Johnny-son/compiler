@@ -58,7 +58,8 @@ void Function::toString(std::string & str)
 		return;
 	}
 
-	str = "define " + getReturnType()->toString() + " " + getIRName() + "(";
+	std::string linkageStr = (getLinkage() == InternalLinkage) ? "define internal " : "define ";
+	str = linkageStr + getReturnType()->toString() + " " + getIRName() + "(";
 
 	bool firstParam = true;
 	for (auto * param: params) {

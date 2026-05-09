@@ -56,12 +56,14 @@ public:
 	/// @param builtin 是否内置函数
 	/// @return 新建的函数对象实例
 	Function *
-	newFunction(std::string name, Type * returnType, std::vector<FormalParam *> params = {}, bool builtin = false);
+	newFunction(std::string name, Type * returnType, std::vector<FormalParam *> params = {}, bool builtin = false,
+	            GlobalValue::LinkageTypes linkage = GlobalValue::ExternalLinkage);
 
 	Function *
-	createFunction(const std::string & name, Type * returnType, std::vector<FormalParam *> params = {}, bool builtin = false)
+	createFunction(const std::string & name, Type * returnType, std::vector<FormalParam *> params = {}, bool builtin = false,
+	               GlobalValue::LinkageTypes linkage = GlobalValue::ExternalLinkage)
 	{
-		return newFunction(name, returnType, std::move(params), builtin);
+		return newFunction(name, returnType, std::move(params), builtin, linkage);
 	}
 
 	// 根据函数名查找函数信息
@@ -117,20 +119,22 @@ public:
 	// 对IR指令中没有名字的全部命名
 	void renameIR();
 
+	// 新建全局变量，要求 name 必须有效，并且加入到全局符号表中。
+	GlobalVariable * newGlobalVariable(Type * type, std::string name,
+	                                   GlobalValue::LinkageTypes linkage = GlobalValue::ExternalLinkage);
+
+	GlobalVariable * createGlobalVariable(Type * type, const std::string & name,
+	                                      GlobalValue::LinkageTypes linkage = GlobalValue::ExternalLinkage)
+	{
+		return newGlobalVariable(type, name, linkage);
+	}
+
 protected:
 	// 根据整数值获取当前符号
 	ConstInt * findConstInt(int32_t val);
 
 	// 根据float值获取当前符号
 	ConstFloat * findConstFloat(float val);
-
-	// 新建全局变量，要求 name 必须有效，并且加入到全局符号表中。
-	GlobalVariable * newGlobalVariable(Type * type, std::string name);
-
-	GlobalVariable * createGlobalVariable(Type * type, const std::string & name)
-	{
-		return newGlobalVariable(type, name);
-	}
 
 	// 根据变量名获取当前符号（只管理全局变量）
 	GlobalVariable * findGlobalVariable(std::string name);

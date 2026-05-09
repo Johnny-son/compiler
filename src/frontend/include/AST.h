@@ -345,6 +345,9 @@ public:
 	// 标记该变量声明是否为常量
 	bool isConst = false;
 
+	// 标记该声明是否为 static 存储类
+	bool isStatic = false;
+
 	// 标记函数形参数组是否省略了第一维
 	bool firstArrayDimOmitted = false;
 };

@@ -15,7 +15,7 @@ grammar MiniC;
 compUnit: (funcDef | varDecl | constDecl)* EOF;
 
 // 函数定义，返回类型使用funcType
-funcDef: funcType T_ID T_L_PAREN funcFParams? T_R_PAREN block;
+funcDef: T_STATIC? funcType T_ID T_L_PAREN funcFParams? T_R_PAREN block;
 
 // 函数返回类型
 funcType: T_INT | T_VOID | T_FLOAT;
@@ -39,13 +39,13 @@ blockItemList: blockItem+;
 blockItem: statement | varDecl | constDecl;
 
 // 变量声明，支持可选初始化
-varDecl: basicType varDef (T_COMMA varDef)* T_SEMICOLON;
+varDecl: T_STATIC? basicType varDef (T_COMMA varDef)* T_SEMICOLON;
 
 // 基本类型
 basicType: T_INT | T_FLOAT;
 
 // 常量声明
-constDecl: T_CONST basicType constDef (T_COMMA constDef)* T_SEMICOLON;
+constDecl: T_STATIC? T_CONST basicType constDef (T_COMMA constDef)* T_SEMICOLON;
 
 // 常量定义
 constDef: T_ID arrayDims? T_ASSIGN initVal;
@@ -169,6 +169,7 @@ T_RETURN: 'return';
 T_INT: 'int';
 T_FLOAT: 'float';
 T_CONST: 'const';
+T_STATIC: 'static';
 T_VOID: 'void';
 
 

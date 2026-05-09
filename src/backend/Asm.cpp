@@ -110,7 +110,9 @@ void AsmPrinter::printFunction(FILE * fp, const AsmFunction & function)
 	}
 
 	fprintf(fp, ".text\n");
-	fprintf(fp, ".globl %s\n", function.name().c_str());
+	if (!function.isInternalLinkage()) {
+		fprintf(fp, ".globl %s\n", function.name().c_str());
+	}
 	fprintf(fp, ".type %s, @function\n", function.name().c_str());
 	fprintf(fp, "%s:\n", function.name().c_str());
 
@@ -146,7 +148,9 @@ std::string AsmPrinter::toString(const AsmFunction & function)
 {
 	std::ostringstream out;
 	out << ".text\n";
-	out << ".globl " << function.name() << "\n";
+	if (!function.isInternalLinkage()) {
+		out << ".globl " << function.name() << "\n";
+	}
 	out << ".type " << function.name() << ", @function\n";
 	out << function.name() << ":\n";
 
