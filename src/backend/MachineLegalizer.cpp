@@ -6,13 +6,18 @@
 MachineLegalizer::MachineLegalizer(const FunctionFrameLayout & layout) : frameLayout(layout)
 {}
 
-void MachineLegalizer::run(MachineFunction & function) const
+void MachineLegalizer::run(MachineFunction & function, bool skipFrameSetup) const
 {
-	for (auto & block: function.blocks()) {
+	for (MachineBlockIndex blockIndex = 0; blockIndex < function.blocks().size(); ++blockIndex) {
+		auto & block = function.blocks()[blockIndex];
 		std::vector<MachineInstr> legalized;
 		legalized.reserve(block.instructions().size());
 
 		for (const auto & inst: block.instructions()) {
+			if (skipFrameSetup && blockIndex == 0 && isFrameSetupInstruction(inst)) {
+				legalized.push_back(inst);
+				continue;
+			}
 			legalizeInstruction(function, legalized, inst);
 		}
 
@@ -29,6 +34,26 @@ bool MachineLegalizer::isMemoryOpcode(MachineOpcode opcode)
 {
 	return opcode == MachineOpcode::LW || opcode == MachineOpcode::LD || opcode == MachineOpcode::SW ||
 		   opcode == MachineOpcode::SD;
+}
+
+bool MachineLegalizer::isFrameSetupInstruction(const MachineInstr & inst)
+{
+	if (inst.opcode == MachineOpcode::ADDI && inst.operands.size() >= 3) {
+		return inst.operands[0].kind == MachineOperandKind::PhysicalReg &&
+			   inst.operands[1].kind == MachineOperandKind::PhysicalReg &&
+			   ((inst.operands[0].preg == PhysicalReg::SP && inst.operands[1].preg == PhysicalReg::SP) ||
+			    (inst.operands[0].preg == PhysicalReg::FP && inst.operands[1].preg == PhysicalReg::SP));
+	}
+
+	if ((inst.opcode == MachineOpcode::SD || inst.opcode == MachineOpcode::SW) && inst.operands.size() >= 2 &&
+		inst.operands[0].kind == MachineOperandKind::PhysicalReg &&
+		(inst.operands[0].preg == PhysicalReg::RA || inst.operands[0].preg == PhysicalReg::FP) &&
+		inst.operands[1].kind == MachineOperandKind::Memory && inst.operands[1].memoryBaseIsPhysical &&
+		inst.operands[1].memoryBasePreg == PhysicalReg::SP) {
+		return true;
+	}
+
+	return false;
 }
 
 void MachineLegalizer::legalizeInstruction(
@@ -103,7 +128,8 @@ void MachineLegalizer::legalizeMemoryInstruction(
 {
 	MachineInstr legalized = inst;
 	for (auto & operand: legalized.operands) {
-		if (operand.kind == MachineOperandKind::Memory || operand.kind == MachineOperandKind::StackSlot) {
+		if (operand.kind == MachineOperandKind::Memory || operand.kind == MachineOperandKind::StackSlot ||
+			operand.kind == MachineOperandKind::SpillSlot) {
 			operand = legalizeMemoryOperand(function, output, operand);
 		}
 	}
@@ -140,8 +166,8 @@ MachineOperand MachineLegalizer::legalizeMemoryOperand(
 	int64_t offset = operand.memoryOffset;
 	MachineOperand base;
 
-	if (operand.kind == MachineOperandKind::StackSlot) {
-		offset = stackSlotOffset(operand.stackValue);
+	if (operand.kind == MachineOperandKind::StackSlot || operand.kind == MachineOperandKind::SpillSlot) {
+		offset = frameOperandOffset(operand);
 		base = MachineOperand::pregUse(PhysicalReg::FP);
 	} else if (operand.memoryBaseIsPhysical) {
 		base = MachineOperand::pregUse(operand.memoryBasePreg);
@@ -150,7 +176,7 @@ MachineOperand MachineLegalizer::legalizeMemoryOperand(
 	}
 
 	if (isSigned12Bit(offset)) {
-		if (operand.kind == MachineOperandKind::StackSlot) {
+		if (operand.kind == MachineOperandKind::StackSlot || operand.kind == MachineOperandKind::SpillSlot) {
 			return operand;
 		}
 		return operand;
@@ -160,9 +186,29 @@ MachineOperand MachineLegalizer::legalizeMemoryOperand(
 	return MachineOperand::memVReg(address.vreg, 0);
 }
 
+int64_t MachineLegalizer::frameOperandOffset(const MachineOperand & operand) const
+{
+	if (operand.kind == MachineOperandKind::StackSlot) {
+		return stackSlotOffset(operand.stackValue);
+	}
+	if (operand.kind == MachineOperandKind::SpillSlot) {
+		return spillSlotOffset(operand.spillSlot);
+	}
+	return 0;
+}
+
 int64_t MachineLegalizer::stackSlotOffset(Value * value) const
 {
 	const auto * slot = frameLayout.slotOf(value);
+	if (slot == nullptr) {
+		return 0;
+	}
+	return slot->offset;
+}
+
+int64_t MachineLegalizer::spillSlotOffset(int32_t id) const
+{
+	const auto * slot = frameLayout.spillSlot(id);
 	if (slot == nullptr) {
 		return 0;
 	}

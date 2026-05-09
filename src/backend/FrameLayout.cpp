@@ -131,6 +131,15 @@ const StackSlotInfo * FunctionFrameLayout::slotOf(Value * value) const
 	return &slotInfos[iter->second];
 }
 
+const StackSlotInfo * FunctionFrameLayout::spillSlot(int32_t id) const
+{
+	if (id < 0 || static_cast<std::size_t>(id) >= spillSlotIndices.size()) {
+		return nullptr;
+	}
+
+	return &slotInfos[spillSlotIndices[static_cast<std::size_t>(id)]];
+}
+
 const StackSlotInfo * FunctionFrameLayout::returnAddressSlot() const
 {
 	for (const auto & slot: slotInfos) {
@@ -170,6 +179,27 @@ void FunctionFrameLayout::addSlot(const StackSlotInfo & slot)
 	if (slot.value != nullptr) {
 		slotIndex.insert({slot.value, index});
 	}
+	if (slot.kind == StackObjectKind::SpillSlot) {
+		spillSlotIndices.push_back(index);
+	}
+}
+
+int32_t FunctionFrameLayout::createSpillSlot(int32_t size, int32_t align)
+{
+	const int32_t actualAlign = align > 0 ? align : stackSlotSize;
+	const int32_t actualSize = alignTo(std::max(size, stackSlotSize), actualAlign);
+	const int32_t cursor = alignTo(totalFrameSize + actualSize, stackAlign);
+
+	StackSlotInfo slot;
+	slot.kind = StackObjectKind::SpillSlot;
+	slot.name = "spill." + std::to_string(spillSlotIndices.size());
+	slot.offset = -cursor;
+	slot.size = actualSize;
+	slot.align = actualAlign;
+	addSlot(slot);
+	setFrameSize(cursor);
+
+	return static_cast<int32_t>(spillSlotIndices.size() - 1);
 }
 
 FunctionFrameLayout FrameLayoutBuilder::build(IRFunctionView function)

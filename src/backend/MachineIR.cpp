@@ -85,6 +85,8 @@ std::string operandToString(const MachineOperand & operand)
 			return std::to_string(operand.imm);
 		case MachineOperandKind::StackSlot:
 			return "stack(" + (operand.stackValue != nullptr ? operand.stackValue->getIRName() : std::string("<fixed>")) + ")";
+		case MachineOperandKind::SpillSlot:
+			return "spill(" + std::to_string(operand.spillSlot) + ")";
 		case MachineOperandKind::Memory:
 			if (operand.memoryBaseIsPhysical) {
 				return std::to_string(operand.memoryOffset) + "(" + TargetRegisterInfo::name(operand.memoryBasePreg) + ")";
@@ -146,6 +148,14 @@ MachineOperand MachineOperand::stackSlot(Value * value)
 	MachineOperand operand;
 	operand.kind = MachineOperandKind::StackSlot;
 	operand.stackValue = value;
+	return operand;
+}
+
+MachineOperand MachineOperand::spillSlotOperand(int32_t id)
+{
+	MachineOperand operand;
+	operand.kind = MachineOperandKind::SpillSlot;
+	operand.spillSlot = id;
 	return operand;
 }
 

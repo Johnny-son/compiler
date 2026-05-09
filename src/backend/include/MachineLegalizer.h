@@ -8,7 +8,8 @@ class MachineLegalizer {
 public:
 	explicit MachineLegalizer(const FunctionFrameLayout & layout);
 
-	void run(MachineFunction & function) const;
+	void run(MachineFunction & function, bool skipFrameSetup = false) const;
+	static bool isFrameSetupInstruction(const MachineInstr & inst);
 
 private:
 	static bool isSigned12Bit(int64_t value);
@@ -42,7 +43,9 @@ private:
 		std::vector<MachineInstr> & output,
 		const MachineOperand & operand) const;
 
+	int64_t frameOperandOffset(const MachineOperand & operand) const;
 	int64_t stackSlotOffset(Value * value) const;
+	int64_t spillSlotOffset(int32_t id) const;
 
 private:
 	const FunctionFrameLayout & frameLayout;

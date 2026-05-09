@@ -14,7 +14,8 @@ enum class StackObjectKind : std::int8_t {
 	FormalParam,
 	AllocaObject,
 	InstructionResult,
-	OutgoingArgArea
+	OutgoingArgArea,
+	SpillSlot
 };
 
 struct StackSlotInfo {
@@ -45,18 +46,21 @@ public:
 	[[nodiscard]] const std::vector<StackSlotInfo> & slots() const;
 	[[nodiscard]] bool hasSlot(Value * value) const;
 	[[nodiscard]] const StackSlotInfo * slotOf(Value * value) const;
+	[[nodiscard]] const StackSlotInfo * spillSlot(int32_t id) const;
 	[[nodiscard]] const StackSlotInfo * returnAddressSlot() const;
 	[[nodiscard]] const StackSlotInfo * oldFramePointerSlot() const;
 
 	void setFrameSize(int32_t size);
 	void setOutgoingArgAreaSize(int32_t size);
 	void addSlot(const StackSlotInfo & slot);
+	int32_t createSpillSlot(int32_t size = stackSlotSize, int32_t align = stackSlotSize);
 
 private:
 	IRFunctionView func;
 	int32_t totalFrameSize = 0;
 	int32_t outgoingAreaSize = 0;
 	std::vector<StackSlotInfo> slotInfos;
+	std::vector<std::size_t> spillSlotIndices;
 	std::unordered_map<Value *, std::size_t> slotIndex;
 };
 

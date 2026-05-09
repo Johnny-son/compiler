@@ -50,6 +50,10 @@ AsmInstruction MachineAsmLowering::lowerInstruction(const MachineInstr & inst) c
 			operands.push_back(lowerStackSlot(operand.stackValue));
 			continue;
 		}
+		if (operand.kind == MachineOperandKind::SpillSlot) {
+			operands.push_back(lowerSpillSlot(operand.spillSlot));
+			continue;
+		}
 		operands.push_back(lowerOperand(operand));
 	}
 
@@ -65,6 +69,8 @@ AsmOperand MachineAsmLowering::lowerOperand(const MachineOperand & operand) cons
 			return AsmOperand::immValue(operand.imm);
 		case MachineOperandKind::StackSlot:
 			return lowerStackSlot(operand.stackValue);
+		case MachineOperandKind::SpillSlot:
+			return lowerSpillSlot(operand.spillSlot);
 		case MachineOperandKind::Memory:
 			return lowerMemoryOperand(operand);
 		case MachineOperandKind::BlockLabel:
@@ -91,9 +97,24 @@ AsmOperand MachineAsmLowering::lowerStackSlot(Value * value) const
 	return AsmOperand::mem(TargetRegisterInfo::name(PhysicalReg::FP), stackSlotOffset(value));
 }
 
+AsmOperand MachineAsmLowering::lowerSpillSlot(int32_t id) const
+{
+	return AsmOperand::mem(TargetRegisterInfo::name(PhysicalReg::FP), spillSlotOffset(id));
+}
+
 int64_t MachineAsmLowering::stackSlotOffset(Value * value) const
 {
 	const auto * slot = frameLayout.slotOf(value);
+	if (slot == nullptr) {
+		return 0;
+	}
+
+	return slot->offset;
+}
+
+int64_t MachineAsmLowering::spillSlotOffset(int32_t id) const
+{
+	const auto * slot = frameLayout.spillSlot(id);
 	if (slot == nullptr) {
 		return 0;
 	}

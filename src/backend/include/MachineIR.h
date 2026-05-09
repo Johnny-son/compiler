@@ -70,6 +70,7 @@ enum class MachineOperandKind : std::int8_t {
 	PhysicalReg,
 	Immediate,
 	StackSlot,
+	SpillSlot,
 	Memory,
 	BlockLabel,
 	GlobalSymbol,
@@ -90,6 +91,7 @@ struct MachineOperand {
 	PhysicalReg preg = PhysicalReg::Invalid;
 	int64_t imm = 0;
 	Value * stackValue = nullptr;
+	int32_t spillSlot = -1;
 	bool memoryBaseIsPhysical = true;
 	PhysicalReg memoryBasePreg = PhysicalReg::Invalid;
 	int32_t memoryBaseVReg = -1;
@@ -102,6 +104,7 @@ struct MachineOperand {
 	static MachineOperand pregDef(PhysicalReg reg);
 	static MachineOperand immValue(int64_t value);
 	static MachineOperand stackSlot(Value * value);
+	static MachineOperand spillSlotOperand(int32_t id);
 	static MachineOperand mem(PhysicalReg base, int64_t offset);
 	static MachineOperand memVReg(int32_t base, int64_t offset);
 	static MachineOperand blockLabel(std::string label);

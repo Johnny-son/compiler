@@ -4,12 +4,10 @@
 
 #include "backend/include/Asm.h"
 #include "backend/include/FrameLayout.h"
+#include "backend/include/GraphColoringRegisterAllocator.h"
 #include "backend/include/IRAdapter.h"
 #include "backend/include/InstructionSelector.h"
 #include "backend/include/MachineAsmLowering.h"
-#include "backend/include/MachineCFG.h"
-#include "backend/include/MachineLegalizer.h"
-#include "backend/include/NaiveRegisterAllocator.h"
 #include "ir/include/Module.h"
 #include "ir/Values/GlobalVariable.h"
 
@@ -74,13 +72,12 @@ bool BackendDriver::run(Module * module, const std::string & outputFile) const
 		FunctionFrameLayout layout = FrameLayoutBuilder::build(function);
 		InstructionSelector selector(function, layout);
 		MachineFunction machineFunction = selector.run();
-		MachineLegalizer legalizer(layout);
-		legalizer.run(machineFunction);
-		MachineCFGBuilder cfgBuilder;
-		cfgBuilder.run(machineFunction);
-		NaiveRegisterAllocator allocator;
-		MachineFunction allocatedFunction = allocator.run(machineFunction);
-		MachineAsmLowering lowering(allocatedFunction, layout);
+		GraphColoringRegisterAllocator allocator;
+		if (!allocator.run(machineFunction, layout)) {
+			fclose(fp);
+			return false;
+		}
+		MachineAsmLowering lowering(machineFunction, layout);
 		AsmFunction asmFunction = lowering.run();
 		auto * func = dynamic_cast<Function *>(function.raw());
 		if (func && func->getLinkage() == GlobalValue::InternalLinkage) {

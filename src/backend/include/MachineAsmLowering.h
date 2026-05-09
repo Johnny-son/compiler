@@ -16,7 +16,9 @@ private:
 	AsmOperand lowerOperand(const MachineOperand & operand) const;
 	AsmOperand lowerMemoryOperand(const MachineOperand & operand) const;
 	AsmOperand lowerStackSlot(Value * value) const;
+	AsmOperand lowerSpillSlot(int32_t id) const;
 	int64_t stackSlotOffset(Value * value) const;
+	int64_t spillSlotOffset(int32_t id) const;
 	std::string opcodeName(MachineOpcode opcode) const;
 
 private:
