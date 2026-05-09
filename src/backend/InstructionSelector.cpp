@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
+#include <cstring>
 #include <utility>
 
 #include "BasicBlock.h"
@@ -9,11 +11,14 @@
 #include "ir/include/Type.h"
 #include "ir/Instructions/AllocaInst.h"
 #include "ir/Instructions/BinaryInst.h"
+#include "ir/Instructions/CastInst.h"
+#include "ir/Instructions/FCmpInst.h"
 #include "ir/Instructions/GetElementPtrInst.h"
 #include "ir/Instructions/ICmpInst.h"
 #include "ir/Instructions/PhiInst.h"
 #include "ir/Types/ArrayType.h"
 #include "ir/Types/PointerType.h"
+#include "ir/Values/ZeroInitializer.h"
 
 namespace {
 
@@ -27,6 +32,24 @@ constexpr PhysicalReg REG_A[] = {
 	PhysicalReg::A6,
 	PhysicalReg::A7,
 };
+
+constexpr PhysicalReg REG_FA[] = {
+	PhysicalReg::FA0,
+	PhysicalReg::FA1,
+	PhysicalReg::FA2,
+	PhysicalReg::FA3,
+	PhysicalReg::FA4,
+	PhysicalReg::FA5,
+	PhysicalReg::FA6,
+	PhysicalReg::FA7,
+};
+
+uint32_t floatBits(float value)
+{
+	uint32_t bits = 0;
+	std::memcpy(&bits, &value, sizeof(bits));
+	return bits;
+}
 
 Type * pointeeType(Value * value)
 {
@@ -108,8 +131,14 @@ void InstructionSelector::translateInst(const IRInstView & inst)
 		case IRInstKind::ICmp:
 			translateICmp(inst);
 			break;
+		case IRInstKind::FCmp:
+			translateFCmp(inst);
+			break;
 		case IRInstKind::ZExt:
 			translateZExt(inst);
+			break;
+		case IRInstKind::Cast:
+			translateCast(inst);
 			break;
 		case IRInstKind::GetElementPtr:
 			translateGEP(inst);
@@ -157,19 +186,24 @@ void InstructionSelector::translateEntry()
 		 MachineOperand::immValue(frameSize)});
 
 	const auto params = function.params();
-	const int maxParamRegs = std::min(static_cast<int>(params.size()), FunctionFrameLayout::argRegCount);
-	for (int index = 0; index < maxParamRegs; ++index) {
-		storeValue(MachineOperand::pregUse(REG_A[index]), params[index]);
-	}
-
-	for (std::size_t index = FunctionFrameLayout::argRegCount; index < params.size(); ++index) {
-		const int64_t callerArgOffset =
-			static_cast<int64_t>((index - FunctionFrameLayout::argRegCount) * FunctionFrameLayout::stackSlotSize);
-		auto tmp = newVRegDef();
+	std::size_t gprIndex = 0;
+	std::size_t fprIndex = 0;
+	std::size_t stackIndex = 0;
+	for (const auto & param: params) {
+		if (regClassForType(param.type()) == RegisterClass::FPR && fprIndex < FunctionFrameLayout::argRegCount) {
+			storeValue(MachineOperand::pregUse(REG_FA[fprIndex++]), param);
+			continue;
+		}
+		if (regClassForType(param.type()) == RegisterClass::GPR && gprIndex < FunctionFrameLayout::argRegCount) {
+			storeValue(MachineOperand::pregUse(REG_A[gprIndex++]), param);
+			continue;
+		}
+		const int64_t callerArgOffset = static_cast<int64_t>(stackIndex++ * FunctionFrameLayout::stackSlotSize);
+		auto tmp = newVRegDef(param.type());
 		machineFunction.emit(
-			loadOpcode(params[index].type()),
+			loadOpcode(param.type()),
 			{tmp, MachineOperand::mem(PhysicalReg::FP, callerArgOffset)});
-		storeValue(tmp.asUse(), params[index]);
+		storeValue(tmp.asUse(), param);
 	}
 }
 
@@ -184,7 +218,7 @@ void InstructionSelector::translateLoad(const IRInstView & inst)
 		return;
 	}
 
-	auto tmp = newVRegDef();
+	auto tmp = newVRegDef(inst.type());
 	loadFromPointer(inst.operand(0), inst.type(), tmp);
 	storeValue(tmp.asUse(), inst.result());
 }
@@ -197,6 +231,10 @@ void InstructionSelector::translateStore(const IRInstView & inst)
 
 	const IRValueView value = inst.operand(0);
 	const IRValueView ptr = inst.operand(1);
+	if (dynamic_cast<ZeroInitializer *>(value.raw()) != nullptr) {
+		storeZeroInitializer(ptr, value.type());
+		return;
+	}
 	auto tmp = loadValue(value);
 	storeToPointer(tmp.asUse(), ptr, value.type());
 }
@@ -225,13 +263,25 @@ void InstructionSelector::translateBinary(const IRInstView & inst)
 		case BinaryInst::Op::SRem:
 			opcode = MachineOpcode::REMW;
 			break;
+		case BinaryInst::Op::FAdd:
+			opcode = MachineOpcode::FADD_S;
+			break;
+		case BinaryInst::Op::FSub:
+			opcode = MachineOpcode::FSUB_S;
+			break;
+		case BinaryInst::Op::FMul:
+			opcode = MachineOpcode::FMUL_S;
+			break;
+		case BinaryInst::Op::FDiv:
+			opcode = MachineOpcode::FDIV_S;
+			break;
 		default:
 			return;
 	}
 
 	auto lhs = loadValue(inst.operand(0));
 	auto rhs = loadValue(inst.operand(1));
-	auto result = newVRegDef();
+	auto result = newVRegDef(inst.type());
 	machineFunction.emit(opcode, {result, lhs.asUse(), rhs.asUse()});
 	storeValue(result.asUse(), inst.result());
 }
@@ -275,6 +325,42 @@ void InstructionSelector::translateICmp(const IRInstView & inst)
 	storeValue(result.asUse(), inst.result());
 }
 
+void InstructionSelector::translateFCmp(const IRInstView & inst)
+{
+	auto * cmpInst = dynamic_cast<FCmpInst *>(inst.raw());
+	if (cmpInst == nullptr || inst.operandCount() < 2 || !inst.hasResult()) {
+		return;
+	}
+
+	auto lhs = loadValue(inst.operand(0));
+	auto rhs = loadValue(inst.operand(1));
+	auto result = newVRegDef(RegisterClass::GPR);
+
+	switch (cmpInst->getPredicate()) {
+		case FCmpInst::Predicate::OEQ:
+			machineFunction.emit(MachineOpcode::FEQ_S, {result, lhs.asUse(), rhs.asUse()});
+			break;
+		case FCmpInst::Predicate::ONE:
+			machineFunction.emit(MachineOpcode::FEQ_S, {result, lhs.asUse(), rhs.asUse()});
+			machineFunction.emit(MachineOpcode::XORI, {result.asDef(), result.asUse(), MachineOperand::immValue(1)});
+			break;
+		case FCmpInst::Predicate::OLT:
+			machineFunction.emit(MachineOpcode::FLT_S, {result, lhs.asUse(), rhs.asUse()});
+			break;
+		case FCmpInst::Predicate::OLE:
+			machineFunction.emit(MachineOpcode::FLE_S, {result, lhs.asUse(), rhs.asUse()});
+			break;
+		case FCmpInst::Predicate::OGT:
+			machineFunction.emit(MachineOpcode::FLT_S, {result, rhs.asUse(), lhs.asUse()});
+			break;
+		case FCmpInst::Predicate::OGE:
+			machineFunction.emit(MachineOpcode::FLE_S, {result, rhs.asUse(), lhs.asUse()});
+			break;
+	}
+
+	storeValue(result.asUse(), inst.result());
+}
+
 void InstructionSelector::translateZExt(const IRInstView & inst)
 {
 	if (inst.operandCount() < 1 || !inst.hasResult()) {
@@ -284,6 +370,28 @@ void InstructionSelector::translateZExt(const IRInstView & inst)
 	auto value = loadValue(inst.operand(0));
 	machineFunction.emit(MachineOpcode::ANDI, {value.asDef(), value.asUse(), MachineOperand::immValue(1)});
 	storeValue(value.asUse(), inst.result());
+}
+
+void InstructionSelector::translateCast(const IRInstView & inst)
+{
+	auto * castInst = dynamic_cast<CastInst *>(inst.raw());
+	if (castInst == nullptr || inst.operandCount() < 1 || !inst.hasResult()) {
+		return;
+	}
+
+	auto value = loadValue(inst.operand(0));
+	auto result = newVRegDef(inst.type());
+	switch (castInst->getCastOp()) {
+		case CastInst::Op::SIToFP:
+			machineFunction.emit(MachineOpcode::FCVT_S_W, {result, value.asUse()});
+			break;
+		case CastInst::Op::FPToSI:
+			machineFunction.emit(
+				MachineOpcode::FCVT_W_S,
+				{result, value.asUse(), MachineOperand::functionSymbol("rtz")});
+			break;
+	}
+	storeValue(result.asUse(), inst.result());
 }
 
 void InstructionSelector::translateGEP(const IRInstView & inst)
@@ -333,21 +441,26 @@ void InstructionSelector::translateGEP(const IRInstView & inst)
 void InstructionSelector::translateCall(const IRInstView & inst)
 {
 	const std::size_t argCount = inst.operandCount();
-	const std::size_t regArgCount = std::min<std::size_t>(argCount, FunctionFrameLayout::argRegCount);
+	std::size_t gprIndex = 0;
+	std::size_t fprIndex = 0;
+	std::size_t stackIndex = 0;
 
-	for (std::size_t index = 0; index < regArgCount; ++index) {
+	for (std::size_t index = 0; index < argCount; ++index) {
 		auto arg = loadValue(inst.operand(index));
-		machineFunction.emit(MachineOpcode::COPY, {MachineOperand::pregDef(REG_A[index]), arg.asUse()});
-	}
-
-	for (std::size_t index = regArgCount; index < argCount; ++index) {
-		auto arg = loadValue(inst.operand(index));
+		if (regClassForType(inst.operand(index).type()) == RegisterClass::FPR && fprIndex < FunctionFrameLayout::argRegCount) {
+			machineFunction.emit(MachineOpcode::COPY, {MachineOperand::pregDef(REG_FA[fprIndex++]), arg.asUse()});
+			continue;
+		}
+		if (regClassForType(inst.operand(index).type()) == RegisterClass::GPR && gprIndex < FunctionFrameLayout::argRegCount) {
+			machineFunction.emit(MachineOpcode::COPY, {MachineOperand::pregDef(REG_A[gprIndex++]), arg.asUse()});
+			continue;
+		}
 		machineFunction.emit(
-			MachineOpcode::SD,
+			storeOpcode(inst.operand(index).type()),
 			{arg.asUse(),
 			 MachineOperand::mem(
 				 PhysicalReg::SP,
-				 static_cast<int64_t>((index - regArgCount) * FunctionFrameLayout::stackSlotSize))});
+				 static_cast<int64_t>(stackIndex++ * FunctionFrameLayout::stackSlotSize))});
 	}
 
 	auto call = MachineInstr::make(MachineOpcode::CALL, {MachineOperand::functionSymbol(inst.calledFunctionName())});
@@ -368,11 +481,32 @@ void InstructionSelector::translateCall(const IRInstView & inst)
 		PhysicalReg::T4,
 		PhysicalReg::T5,
 		PhysicalReg::T6,
+		PhysicalReg::FA0,
+		PhysicalReg::FA1,
+		PhysicalReg::FA2,
+		PhysicalReg::FA3,
+		PhysicalReg::FA4,
+		PhysicalReg::FA5,
+		PhysicalReg::FA6,
+		PhysicalReg::FA7,
+		PhysicalReg::FT0,
+		PhysicalReg::FT1,
+		PhysicalReg::FT2,
+		PhysicalReg::FT3,
+		PhysicalReg::FT4,
+		PhysicalReg::FT5,
+		PhysicalReg::FT6,
+		PhysicalReg::FT7,
+		PhysicalReg::FT8,
+		PhysicalReg::FT9,
+		PhysicalReg::FT10,
+		PhysicalReg::FT11,
 	};
 	machineFunction.currentBlock()->emit(call);
 
 	if (inst.hasResult()) {
-		storeValue(MachineOperand::pregUse(PhysicalReg::A0), inst.result());
+		const PhysicalReg returnReg = regClassForType(inst.type()) == RegisterClass::FPR ? PhysicalReg::FA0 : PhysicalReg::A0;
+		storeValue(MachineOperand::pregUse(returnReg), inst.result());
 	}
 }
 
@@ -412,7 +546,9 @@ void InstructionSelector::translateReturn(const IRInstView & inst)
 {
 	if (inst.operandCount() > 0) {
 		auto value = loadValue(inst.operand(0));
-		machineFunction.emit(MachineOpcode::COPY, {MachineOperand::pregDef(PhysicalReg::A0), value.asUse()});
+		const PhysicalReg returnReg =
+			regClassForType(inst.operand(0).type()) == RegisterClass::FPR ? PhysicalReg::FA0 : PhysicalReg::A0;
+		machineFunction.emit(MachineOpcode::COPY, {MachineOperand::pregDef(returnReg), value.asUse()});
 	}
 
 	auto oldFp = newVRegDef();
@@ -432,14 +568,19 @@ void InstructionSelector::translateReturn(const IRInstView & inst)
 	machineFunction.emit(MachineOpcode::RET);
 }
 
-MachineOperand InstructionSelector::newVRegDef()
+MachineOperand InstructionSelector::newVRegDef(RegisterClass regClass)
 {
-	return MachineOperand::vregDef(machineFunction.createVirtualReg(RegisterClass::GPR));
+	return MachineOperand::vregDef(machineFunction.createVirtualReg(regClass), regClass);
+}
+
+MachineOperand InstructionSelector::newVRegDef(Type * type)
+{
+	return newVRegDef(regClassForType(type));
 }
 
 MachineOperand InstructionSelector::loadValue(const IRValueView & value)
 {
-	auto dst = newVRegDef();
+	auto dst = newVRegDef(value.type());
 	loadValueTo(value, dst);
 	return dst;
 }
@@ -453,6 +594,13 @@ void InstructionSelector::loadValueTo(const IRValueView & value, const MachineOp
 
 	if (value.isConstantInt()) {
 		machineFunction.emit(MachineOpcode::LI, {dst.asDef(), MachineOperand::immValue(value.intValue())});
+		return;
+	}
+
+	if (value.isConstantFloat()) {
+		auto bits = newVRegDef(RegisterClass::GPR);
+		machineFunction.emit(MachineOpcode::LI, {bits, MachineOperand::immValue(floatBits(value.floatValue()))});
+		machineFunction.emit(MachineOpcode::FMV_W_X, {dst.asDef(), bits.asUse()});
 		return;
 	}
 
@@ -492,6 +640,21 @@ void InstructionSelector::storeValue(const MachineOperand & src, const IRValueVi
 	if (slot != nullptr) {
 		(void) slot;
 		machineFunction.emit(storeOpcode(value.type()), {src.asUse(), MachineOperand::stackSlot(value.raw())});
+	}
+}
+
+void InstructionSelector::storeZeroInitializer(const IRValueView & ptr, Type * valueType)
+{
+	if (valueType == nullptr || valueType->getSize() <= 0) {
+		return;
+	}
+
+	auto address = newVRegDef(RegisterClass::GPR);
+	loadAddress(ptr, address);
+	for (int32_t offset = 0; offset < valueType->getSize(); offset += 4) {
+		machineFunction.emit(
+			MachineOpcode::SW,
+			{MachineOperand::pregUse(PhysicalReg::Zero), MachineOperand::memVReg(address.vreg, offset)});
 	}
 }
 
@@ -663,12 +826,28 @@ bool InstructionSelector::isEightByteType(Type * type) const
 	return type != nullptr && (type->isPointerType() || type->getSize() > 4);
 }
 
+bool InstructionSelector::isFloatType(Type * type) const
+{
+	return type != nullptr && type->isFloatType();
+}
+
+RegisterClass InstructionSelector::regClassForType(Type * type) const
+{
+	return isFloatType(type) ? RegisterClass::FPR : RegisterClass::GPR;
+}
+
 MachineOpcode InstructionSelector::loadOpcode(Type * type) const
 {
+	if (isFloatType(type)) {
+		return MachineOpcode::FLW;
+	}
 	return isEightByteType(type) ? MachineOpcode::LD : MachineOpcode::LW;
 }
 
 MachineOpcode InstructionSelector::storeOpcode(Type * type) const
 {
+	if (isFloatType(type)) {
+		return MachineOpcode::FSW;
+	}
 	return isEightByteType(type) ? MachineOpcode::SD : MachineOpcode::SW;
 }

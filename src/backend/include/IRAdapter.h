@@ -15,6 +15,7 @@ class Type;
 enum class IRValueKind : std::int8_t {
 	Invalid,
 	ConstInt,
+	ConstFloat,
 	GlobalVariable,
 	Function,
 	FormalParam,
@@ -29,7 +30,9 @@ enum class IRInstKind : std::int8_t {
 	Store,
 	Binary,
 	ICmp,
+	FCmp,
 	ZExt,
+	Cast,
 	GetElementPtr,
 	Call,
 	Phi,
@@ -49,6 +52,7 @@ public:
 	[[nodiscard]] Type * type() const;
 	[[nodiscard]] IRValueKind kind() const;
 	[[nodiscard]] bool isConstantInt() const;
+	[[nodiscard]] bool isConstantFloat() const;
 	[[nodiscard]] bool isGlobalVariable() const;
 	[[nodiscard]] bool isFunction() const;
 	[[nodiscard]] bool isFormalParam() const;
@@ -56,6 +60,7 @@ public:
 	[[nodiscard]] std::string name() const;
 	[[nodiscard]] std::string irName() const;
 	[[nodiscard]] int32_t intValue(int32_t fallback = 0) const;
+	[[nodiscard]] float floatValue(float fallback = 0.0f) const;
 
 private:
 	Value * value = nullptr;

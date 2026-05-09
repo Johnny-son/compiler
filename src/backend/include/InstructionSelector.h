@@ -24,17 +24,21 @@ private:
 	void translateStore(const IRInstView & inst);
 	void translateBinary(const IRInstView & inst);
 	void translateICmp(const IRInstView & inst);
+	void translateFCmp(const IRInstView & inst);
 	void translateZExt(const IRInstView & inst);
+	void translateCast(const IRInstView & inst);
 	void translateGEP(const IRInstView & inst);
 	void translateCall(const IRInstView & inst);
 	void translatePhi(const IRInstView & inst);
 	void translateBranch(const IRInstView & inst);
 	void translateReturn(const IRInstView & inst);
 
-	MachineOperand newVRegDef();
+	MachineOperand newVRegDef(RegisterClass regClass = RegisterClass::GPR);
+	MachineOperand newVRegDef(Type * type);
 	MachineOperand loadValue(const IRValueView & value);
 	void loadValueTo(const IRValueView & value, const MachineOperand & dst);
 	void storeValue(const MachineOperand & src, const IRValueView & value);
+	void storeZeroInitializer(const IRValueView & ptr, Type * valueType);
 	void loadAddress(const IRValueView & value, const MachineOperand & dst);
 	void loadFromPointer(const IRValueView & ptr, Type * valueType, const MachineOperand & dst);
 	void storeToPointer(const MachineOperand & src, const IRValueView & ptr, Type * valueType);
@@ -46,6 +50,8 @@ private:
 	std::string labelName(BasicBlock * block);
 	const StackSlotInfo * slotOf(const IRValueView & value) const;
 	bool isEightByteType(Type * type) const;
+	bool isFloatType(Type * type) const;
+	RegisterClass regClassForType(Type * type) const;
 	MachineOpcode loadOpcode(Type * type) const;
 	MachineOpcode storeOpcode(Type * type) const;
 

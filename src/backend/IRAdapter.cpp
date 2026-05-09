@@ -12,6 +12,8 @@
 #include "ir/Instructions/BinaryInst.h"
 #include "ir/Instructions/BranchInst.h"
 #include "ir/Instructions/CallInst.h"
+#include "ir/Instructions/CastInst.h"
+#include "ir/Instructions/FCmpInst.h"
 #include "ir/Instructions/GetElementPtrInst.h"
 #include "ir/Instructions/ICmpInst.h"
 #include "ir/Instructions/LoadInst.h"
@@ -20,6 +22,7 @@
 #include "ir/Instructions/StoreInst.h"
 #include "ir/Instructions/ZExtInst.h"
 #include "ir/Values/ConstInt.h"
+#include "ir/Values/ConstFloat.h"
 #include "ir/Values/FormalParam.h"
 #include "ir/Values/GlobalVariable.h"
 
@@ -33,6 +36,9 @@ IRValueKind classifyValue(Value * value)
 
 	if (dynamic_cast<ConstInt *>(value) != nullptr) {
 		return IRValueKind::ConstInt;
+	}
+	if (dynamic_cast<ConstFloat *>(value) != nullptr) {
+		return IRValueKind::ConstFloat;
 	}
 
 	if (dynamic_cast<Function *>(value) != nullptr) {
@@ -75,8 +81,14 @@ IRInstKind classifyInstruction(Instruction * inst)
 	if (dynamic_cast<ICmpInst *>(inst) != nullptr) {
 		return IRInstKind::ICmp;
 	}
+	if (dynamic_cast<FCmpInst *>(inst) != nullptr) {
+		return IRInstKind::FCmp;
+	}
 	if (dynamic_cast<ZExtInst *>(inst) != nullptr) {
 		return IRInstKind::ZExt;
+	}
+	if (dynamic_cast<CastInst *>(inst) != nullptr) {
+		return IRInstKind::Cast;
 	}
 	if (dynamic_cast<GetElementPtrInst *>(inst) != nullptr) {
 		return IRInstKind::GetElementPtr;
@@ -127,6 +139,11 @@ bool IRValueView::isConstantInt() const
 	return kind() == IRValueKind::ConstInt;
 }
 
+bool IRValueView::isConstantFloat() const
+{
+	return kind() == IRValueKind::ConstFloat;
+}
+
 bool IRValueView::isGlobalVariable() const
 {
 	return kind() == IRValueKind::GlobalVariable;
@@ -161,6 +178,12 @@ int32_t IRValueView::intValue(int32_t fallback) const
 {
 	auto * constInt = dynamic_cast<ConstInt *>(value);
 	return constInt != nullptr ? constInt->getVal() : fallback;
+}
+
+float IRValueView::floatValue(float fallback) const
+{
+	auto * constFloat = dynamic_cast<ConstFloat *>(value);
+	return constFloat != nullptr ? constFloat->getVal() : fallback;
 }
 
 IRInstView::IRInstView(Instruction * inst) : inst(inst)

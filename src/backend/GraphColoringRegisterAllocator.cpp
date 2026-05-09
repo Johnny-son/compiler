@@ -15,7 +15,7 @@ namespace {
 
 constexpr int maxIterations = 128;
 
-const PhysicalReg allocatableRegs[] = {
+const PhysicalReg allocatableGPRs[] = {
 	PhysicalReg::T0,
 	PhysicalReg::T1,
 	PhysicalReg::T2,
@@ -25,14 +25,52 @@ const PhysicalReg allocatableRegs[] = {
 	PhysicalReg::T6,
 };
 
+const PhysicalReg allocatableFPRs[] = {
+	PhysicalReg::FT0,
+	PhysicalReg::FT1,
+	PhysicalReg::FT2,
+	PhysicalReg::FT3,
+	PhysicalReg::FT4,
+	PhysicalReg::FT5,
+	PhysicalReg::FT6,
+	PhysicalReg::FT7,
+	PhysicalReg::FT8,
+	PhysicalReg::FT9,
+	PhysicalReg::FT10,
+	PhysicalReg::FT11,
+};
+
+std::vector<PhysicalReg> allocatableRegsFor(RegisterClass regClass)
+{
+	if (regClass == RegisterClass::FPR) {
+		return std::vector<PhysicalReg>(std::begin(allocatableFPRs), std::end(allocatableFPRs));
+	}
+	return std::vector<PhysicalReg>(std::begin(allocatableGPRs), std::end(allocatableGPRs));
+}
+
+MachineOpcode spillLoadOpcode(RegisterClass regClass)
+{
+	return regClass == RegisterClass::FPR ? MachineOpcode::FLW : MachineOpcode::LD;
+}
+
+MachineOpcode spillStoreOpcode(RegisterClass regClass)
+{
+	return regClass == RegisterClass::FPR ? MachineOpcode::FSW : MachineOpcode::SD;
+}
+
 struct InterferenceGraph {
 	std::map<int32_t, std::set<int32_t>> neighbors;
+	std::map<int32_t, RegisterClass> classes;
 	std::set<int32_t> mustSpill;
 
-	void addNode(int32_t vreg)
+	void addNode(int32_t vreg, RegisterClass regClass = RegisterClass::GPR)
 	{
 		if (vreg >= 0) {
 			neighbors.try_emplace(vreg);
+			auto iter = classes.find(vreg);
+			if (iter == classes.end()) {
+				classes.emplace(vreg, regClass);
+			}
 		}
 	}
 
@@ -43,6 +81,9 @@ struct InterferenceGraph {
 		}
 		addNode(lhs);
 		addNode(rhs);
+		if (classes[lhs] != classes[rhs]) {
+			return;
+		}
 		neighbors[lhs].insert(rhs);
 		neighbors[rhs].insert(lhs);
 	}
@@ -60,15 +101,20 @@ struct ColoringResult {
 	std::unordered_map<int32_t, PhysicalReg> assignment;
 };
 
-void collectOperandNodes(const MachineOperand & operand, InterferenceGraph & graph)
+RegisterClass classOf(const MachineFunction & function, int32_t vreg)
+{
+	return function.registerClass(vreg);
+}
+
+void collectOperandNodes(const MachineFunction & function, const MachineOperand & operand, InterferenceGraph & graph)
 {
 	if (operand.kind == MachineOperandKind::VirtualReg) {
-		graph.addNode(operand.vreg);
+		graph.addNode(operand.vreg, classOf(function, operand.vreg));
 		return;
 	}
 
 	if (operand.kind == MachineOperandKind::Memory && !operand.memoryBaseIsPhysical) {
-		graph.addNode(operand.memoryBaseVReg);
+		graph.addNode(operand.memoryBaseVReg, classOf(function, operand.memoryBaseVReg));
 	}
 }
 
@@ -83,17 +129,17 @@ InterferenceGraph buildInterferenceGraph(const MachineFunction & function, const
 			const auto & info = liveness.instruction(blockIndex, instIndex);
 
 			for (const auto & operand: inst.operands) {
-				collectOperandNodes(operand, graph);
+				collectOperandNodes(function, operand, graph);
 			}
 			for (int32_t vreg: info.liveIn) {
-				graph.addNode(vreg);
+				graph.addNode(vreg, classOf(function, vreg));
 			}
 			for (int32_t vreg: info.liveOut) {
-				graph.addNode(vreg);
+				graph.addNode(vreg, classOf(function, vreg));
 			}
 
 			for (int32_t def: info.def) {
-				graph.addNode(def);
+				graph.addNode(def, classOf(function, def));
 				for (int32_t live: info.liveOut) {
 					graph.addEdge(def, live);
 				}
@@ -158,7 +204,9 @@ ColoringResult colorGraph(const InterferenceGraph & graph)
 		}
 
 		std::optional<PhysicalReg> selected;
-		for (PhysicalReg reg: allocatableRegs) {
+		auto classIter = graph.classes.find(node);
+		const RegisterClass regClass = classIter != graph.classes.end() ? classIter->second : RegisterClass::GPR;
+		for (PhysicalReg reg: allocatableRegsFor(regClass)) {
 			if (used.find(reg) == used.end()) {
 				selected = reg;
 				break;
@@ -216,6 +264,7 @@ void replaceOperandDef(MachineOperand & operand, int32_t oldVReg, const MachineO
 void rewriteSpill(MachineFunction & function, FunctionFrameLayout & layout, int32_t spilledVReg)
 {
 	const int32_t slot = layout.createSpillSlot();
+	const RegisterClass regClass = function.registerClass(spilledVReg);
 
 	for (auto & block: function.blocks()) {
 		std::vector<MachineInstr> rewritten;
@@ -231,9 +280,9 @@ void rewriteSpill(MachineFunction & function, FunctionFrameLayout & layout, int3
 
 			MachineInstr newInst = inst;
 			if (hasUse) {
-				MachineOperand reload = MachineOperand::vregDef(function.createVirtualReg(RegisterClass::GPR));
+				MachineOperand reload = MachineOperand::vregDef(function.createVirtualReg(regClass), regClass);
 				rewritten.push_back(MachineInstr::make(
-					MachineOpcode::LD,
+					spillLoadOpcode(regClass),
 					{reload, MachineOperand::spillSlotOperand(slot)}));
 				for (auto & operand: newInst.operands) {
 					replaceOperandUse(operand, spilledVReg, reload.asUse());
@@ -242,7 +291,7 @@ void rewriteSpill(MachineFunction & function, FunctionFrameLayout & layout, int3
 
 			MachineOperand newDef;
 			if (hasDef) {
-				newDef = MachineOperand::vregDef(function.createVirtualReg(RegisterClass::GPR));
+				newDef = MachineOperand::vregDef(function.createVirtualReg(regClass), regClass);
 				for (auto & operand: newInst.operands) {
 					replaceOperandDef(operand, spilledVReg, newDef);
 				}
@@ -252,7 +301,7 @@ void rewriteSpill(MachineFunction & function, FunctionFrameLayout & layout, int3
 
 			if (hasDef) {
 				rewritten.push_back(MachineInstr::make(
-					MachineOpcode::SD,
+					spillStoreOpcode(regClass),
 					{newDef.asUse(), MachineOperand::spillSlotOperand(slot)}));
 			}
 		}

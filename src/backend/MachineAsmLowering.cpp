@@ -1,6 +1,16 @@
 #include "backend/include/MachineAsmLowering.h"
 
+#include <string>
 #include <utility>
+
+namespace {
+
+bool isFPRName(const std::string & name)
+{
+	return name.rfind("fa", 0) == 0 || name.rfind("ft", 0) == 0 || name.rfind("fs", 0) == 0;
+}
+
+} // namespace
 
 MachineAsmLowering::MachineAsmLowering(const MachineFunction & function, const FunctionFrameLayout & layout)
 	: function(function), frameLayout(layout)
@@ -28,9 +38,13 @@ AsmFunction MachineAsmLowering::run() const
 AsmInstruction MachineAsmLowering::lowerInstruction(const MachineInstr & inst) const
 {
 	if (inst.opcode == MachineOpcode::COPY) {
-		return AsmInstruction::makeOp(
-			"mv",
-			{lowerOperand(inst.operands[0]), lowerOperand(inst.operands[1])});
+		const auto dst = lowerOperand(inst.operands[0]);
+		const auto src = lowerOperand(inst.operands[1]);
+		if (dst.kind == AsmOperandKind::Register && src.kind == AsmOperandKind::Register &&
+			(isFPRName(dst.text) || isFPRName(src.text))) {
+			return AsmInstruction::makeOp("fmv.s", {dst, src});
+		}
+		return AsmInstruction::makeOp("mv", {dst, src});
 	}
 
 	if (inst.opcode == MachineOpcode::LA_STACK) {
@@ -161,10 +175,36 @@ std::string MachineAsmLowering::opcodeName(MachineOpcode opcode) const
 			return "lw";
 		case MachineOpcode::LD:
 			return "ld";
+		case MachineOpcode::FLW:
+			return "flw";
 		case MachineOpcode::SW:
 			return "sw";
 		case MachineOpcode::SD:
 			return "sd";
+		case MachineOpcode::FSW:
+			return "fsw";
+		case MachineOpcode::FADD_S:
+			return "fadd.s";
+		case MachineOpcode::FSUB_S:
+			return "fsub.s";
+		case MachineOpcode::FMUL_S:
+			return "fmul.s";
+		case MachineOpcode::FDIV_S:
+			return "fdiv.s";
+		case MachineOpcode::FEQ_S:
+			return "feq.s";
+		case MachineOpcode::FLT_S:
+			return "flt.s";
+		case MachineOpcode::FLE_S:
+			return "fle.s";
+		case MachineOpcode::FCVT_S_W:
+			return "fcvt.s.w";
+		case MachineOpcode::FCVT_W_S:
+			return "fcvt.w.s";
+		case MachineOpcode::FMV_W_X:
+			return "fmv.w.x";
+		case MachineOpcode::FMV_X_W:
+			return "fmv.x.w";
 		case MachineOpcode::CALL:
 			return "call";
 		case MachineOpcode::J:

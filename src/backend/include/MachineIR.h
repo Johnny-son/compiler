@@ -10,7 +10,8 @@ class Value;
 using MachineBlockIndex = std::size_t;
 
 enum class RegisterClass : std::int8_t {
-	GPR
+	GPR,
+	FPR
 };
 
 enum class PhysicalReg : std::int16_t {
@@ -33,7 +34,27 @@ enum class PhysicalReg : std::int16_t {
 	T3,
 	T4,
 	T5,
-	T6
+	T6,
+	FA0,
+	FA1,
+	FA2,
+	FA3,
+	FA4,
+	FA5,
+	FA6,
+	FA7,
+	FT0,
+	FT1,
+	FT2,
+	FT3,
+	FT4,
+	FT5,
+	FT6,
+	FT7,
+	FT8,
+	FT9,
+	FT10,
+	FT11
 };
 
 enum class MachineOpcode : std::int16_t {
@@ -56,8 +77,21 @@ enum class MachineOpcode : std::int16_t {
 	LA_STACK,
 	LW,
 	LD,
+	FLW,
 	SW,
 	SD,
+	FSW,
+	FADD_S,
+	FSUB_S,
+	FMUL_S,
+	FDIV_S,
+	FEQ_S,
+	FLT_S,
+	FLE_S,
+	FCVT_S_W,
+	FCVT_W_S,
+	FMV_W_X,
+	FMV_X_W,
 	COPY,
 	CALL,
 	J,
@@ -167,12 +201,14 @@ public:
 	void setCurrentBlock(std::size_t index);
 	void emit(MachineOpcode opcode, std::vector<MachineOperand> operands = {});
 	int32_t createVirtualReg(RegisterClass regClass = RegisterClass::GPR);
+	[[nodiscard]] RegisterClass registerClass(int32_t vreg) const;
 
 private:
 	std::string funcName;
 	std::vector<MachineBasicBlock> basicBlocks;
 	std::size_t currentBlockIndex = 0;
 	int32_t nextVReg = 0;
+	std::vector<RegisterClass> vregClasses;
 };
 
 class TargetRegisterInfo {

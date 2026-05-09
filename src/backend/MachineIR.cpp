@@ -49,10 +49,36 @@ const char * opcodeName(MachineOpcode opcode)
 			return "lw";
 		case MachineOpcode::LD:
 			return "ld";
+		case MachineOpcode::FLW:
+			return "flw";
 		case MachineOpcode::SW:
 			return "sw";
 		case MachineOpcode::SD:
 			return "sd";
+		case MachineOpcode::FSW:
+			return "fsw";
+		case MachineOpcode::FADD_S:
+			return "fadd.s";
+		case MachineOpcode::FSUB_S:
+			return "fsub.s";
+		case MachineOpcode::FMUL_S:
+			return "fmul.s";
+		case MachineOpcode::FDIV_S:
+			return "fdiv.s";
+		case MachineOpcode::FEQ_S:
+			return "feq.s";
+		case MachineOpcode::FLT_S:
+			return "flt.s";
+		case MachineOpcode::FLE_S:
+			return "fle.s";
+		case MachineOpcode::FCVT_S_W:
+			return "fcvt.s.w";
+		case MachineOpcode::FCVT_W_S:
+			return "fcvt.w.s";
+		case MachineOpcode::FMV_W_X:
+			return "fmv.w.x";
+		case MachineOpcode::FMV_X_W:
+			return "fmv.x.w";
 		case MachineOpcode::COPY:
 			return "copy";
 		case MachineOpcode::CALL:
@@ -356,9 +382,18 @@ void MachineFunction::emit(MachineOpcode opcode, std::vector<MachineOperand> ope
 	currentBlock()->emit(opcode, std::move(operands));
 }
 
-int32_t MachineFunction::createVirtualReg(RegisterClass)
+int32_t MachineFunction::createVirtualReg(RegisterClass regClass)
 {
+	vregClasses.push_back(regClass);
 	return nextVReg++;
+}
+
+RegisterClass MachineFunction::registerClass(int32_t vreg) const
+{
+	if (vreg < 0 || static_cast<std::size_t>(vreg) >= vregClasses.size()) {
+		return RegisterClass::GPR;
+	}
+	return vregClasses[static_cast<std::size_t>(vreg)];
 }
 
 const char * TargetRegisterInfo::name(PhysicalReg reg)
@@ -402,6 +437,46 @@ const char * TargetRegisterInfo::name(PhysicalReg reg)
 			return "t5";
 		case PhysicalReg::T6:
 			return "t6";
+		case PhysicalReg::FA0:
+			return "fa0";
+		case PhysicalReg::FA1:
+			return "fa1";
+		case PhysicalReg::FA2:
+			return "fa2";
+		case PhysicalReg::FA3:
+			return "fa3";
+		case PhysicalReg::FA4:
+			return "fa4";
+		case PhysicalReg::FA5:
+			return "fa5";
+		case PhysicalReg::FA6:
+			return "fa6";
+		case PhysicalReg::FA7:
+			return "fa7";
+		case PhysicalReg::FT0:
+			return "ft0";
+		case PhysicalReg::FT1:
+			return "ft1";
+		case PhysicalReg::FT2:
+			return "ft2";
+		case PhysicalReg::FT3:
+			return "ft3";
+		case PhysicalReg::FT4:
+			return "ft4";
+		case PhysicalReg::FT5:
+			return "ft5";
+		case PhysicalReg::FT6:
+			return "ft6";
+		case PhysicalReg::FT7:
+			return "ft7";
+		case PhysicalReg::FT8:
+			return "ft8";
+		case PhysicalReg::FT9:
+			return "ft9";
+		case PhysicalReg::FT10:
+			return "ft10";
+		case PhysicalReg::FT11:
+			return "ft11";
 		default:
 			return "<invalid>";
 	}

@@ -33,7 +33,7 @@ bool MachineLegalizer::isSigned12Bit(int64_t value)
 bool MachineLegalizer::isMemoryOpcode(MachineOpcode opcode)
 {
 	return opcode == MachineOpcode::LW || opcode == MachineOpcode::LD || opcode == MachineOpcode::SW ||
-		   opcode == MachineOpcode::SD;
+		   opcode == MachineOpcode::SD || opcode == MachineOpcode::FLW || opcode == MachineOpcode::FSW;
 }
 
 bool MachineLegalizer::isFrameSetupInstruction(const MachineInstr & inst)
