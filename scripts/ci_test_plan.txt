@@ -6,12 +6,15 @@
 #   test/contesttestcases/2023_function/2023_func_00_main.c
 # Prefix a target with ? to make it optional. Missing optional targets are
 # skipped, which is useful for local testcase sets not present in CI.
+# Prefix a target with ! after a directory target to exclude a known-heavy case.
 
 ast:
 
 ir:
 2023_function
 2025_function
+2026_function
+!2026_function/h_functional/30_many_dimensions.sy
 # 2025_func_030_many_dimensions is kept in the repository but not run by CI by default.
 # Run manually with:
 #   bash scripts/run_ci_tests.sh -ir test/contesttestcases/25_func_30/2025_func_030_many_dimensions.c --compiler ./build/compiler
@@ -36,6 +39,8 @@ test/stage1_params/static_const.c
 asm:
 2023_function
 2025_function
+2026_function
+!2026_function/h_functional/30_many_dimensions.sy
 test/stage1_params/param_basic.c
 test/stage1_params/param_multi.c
 test/stage1_params/param_assign.c
@@ -60,8 +65,9 @@ test/stage1_params/static_const_assign.c
 test/stage1_params/static_const_not_init.c
 
 perf:
-# Local only. The 2025 performance inputs are too large for GitHub CI.
+# Local only. The 2025/2026 performance inputs are too large for GitHub CI.
 # `bash scripts/run_ci_tests.sh --all` skips this section by default.
 # Use `bash scripts/run_ci_tests.sh --all --with-perf --compiler ./build/compiler`
 # or `bash scripts/run_ci_tests.sh -perf 2025_performance --compiler ./build/compiler` locally.
 ?2025_performance
+?2026_performance

@@ -19,6 +19,10 @@ MINIC_TARGET="RISCV64"
 LLVM_CC="${LLVM_CC:-}"
 ASM_CC="${ASM_CC:-}"
 ASM_RUNNER="${ASM_RUNNER:-}"
+TIMEOUT_BIN="${TIMEOUT_BIN:-}"
+CASE_COMPILE_TIMEOUT="${CASE_COMPILE_TIMEOUT:-120s}"
+CASE_LINK_TIMEOUT="${CASE_LINK_TIMEOUT:-120s}"
+CASE_RUN_TIMEOUT="${CASE_RUN_TIMEOUT:-20s}"
 
 declare -a TARGET_SPECS=()
 declare -a CASES=()
@@ -56,6 +60,7 @@ Targets:
   2023_func_00_main.c
   2023_func_00_main
   test/contesttestcases/2023_function/2023_func_00_main.c
+  !test/contesttestcases/2026_function/h_functional/30_many_dimensions.sy
 
 Options:
   -ast                Test AST generation
@@ -69,6 +74,11 @@ Options:
   --compiler <path>   Override compiler binary path
   --show-failures     Print failed case names after summary
   -h, --help          Show this help message
+
+Environment:
+  CASE_COMPILE_TIMEOUT  Per-case compiler timeout, default 120s
+  CASE_LINK_TIMEOUT     Per-case link timeout, default 120s
+  CASE_RUN_TIMEOUT      Per-case executable timeout, default 20s
 
 Examples:
   scripts/run_ci_tests.sh -ir 2023_function
@@ -162,6 +172,34 @@ pick_first_command() {
   return 1
 }
 
+configure_timeout_tool() {
+  if [[ -n "${TIMEOUT_BIN}" ]]; then
+    if ! command -v "${TIMEOUT_BIN}" >/dev/null 2>&1; then
+      echo "TIMEOUT_BIN not found: ${TIMEOUT_BIN}" >&2
+      exit 1
+    fi
+    return
+  fi
+
+  TIMEOUT_BIN="$(pick_first_command timeout gtimeout || true)"
+}
+
+is_timeout_exit() {
+  local exit_code="$1"
+  [[ "${exit_code}" -eq 124 || "${exit_code}" -eq 137 ]]
+}
+
+run_logged_timed_command() {
+  local timeout_duration="$1"
+  shift
+
+  if [[ -n "${TIMEOUT_BIN}" ]]; then
+    run_logged_command "${TIMEOUT_BIN}" --kill-after=5s "${timeout_duration}" "$@"
+  else
+    run_logged_command "$@"
+  fi
+}
+
 resolve_compiler_for_mode() {
   local suite_mode="$1"
   local candidate
@@ -221,6 +259,20 @@ add_case_if_new() {
   CASES+=("${case_file}")
 }
 
+remove_case_if_present() {
+  local case_file="$1"
+  local existing
+  local -a kept_cases=()
+
+  for existing in ${CASES[@]+"${CASES[@]}"}; do
+    if [[ "${existing}" != "${case_file}" ]]; then
+      kept_cases+=("${existing}")
+    fi
+  done
+
+  CASES=("${kept_cases[@]}")
+}
+
 add_cases_from_dir() {
   local dir_path="$1"
   local found=0
@@ -229,7 +281,7 @@ add_cases_from_dir() {
   while IFS= read -r case_file; do
     add_case_if_new "${case_file}"
     found=1
-  done < <(find "${dir_path}" -maxdepth 1 -type f -name "*.c" | LC_ALL=C sort)
+  done < <(find "${dir_path}" -type f \( -name "*.c" -o -name "*.sy" \) | LC_ALL=C sort)
 
   if [[ ${found} -eq 0 ]]; then
     echo "No test cases found in directory: ${dir_path}" >&2
@@ -251,6 +303,76 @@ infer_case_dir() {
   fi
 
   return 1
+}
+
+resolve_case_file_path() {
+  local token="$1"
+  local original_token="$token"
+  local normalized="${token%/}"
+  local case_name=""
+  local dir_path=""
+  local candidate=""
+  local matches=""
+  local match_count=0
+
+  if [[ -f "${normalized}" ]]; then
+    printf '%s/%s\n' "$(cd "$(dirname "${normalized}")" && pwd)" "$(basename "${normalized}")"
+    return
+  fi
+
+  if [[ -f "${REPO_ROOT}/${normalized}" ]]; then
+    printf '%s\n' "${REPO_ROOT}/${normalized}"
+    return
+  fi
+
+  if [[ -f "${TEST_ROOT}/${normalized}" ]]; then
+    printf '%s\n' "${TEST_ROOT}/${normalized}"
+    return
+  fi
+
+  case_name="$(basename "${normalized}")"
+  case_name="${case_name%.c}"
+  case_name="${case_name%.sy}"
+
+  if dir_path="$(infer_case_dir "${case_name}")"; then
+    for candidate in "${dir_path}/${case_name}.c" "${dir_path}/${case_name}.sy"; do
+      if [[ -f "${candidate}" ]]; then
+        printf '%s\n' "${candidate}"
+        return
+      fi
+    done
+  fi
+
+  matches="$(find "${TEST_ROOT}" -maxdepth 3 -type f \( -name "${case_name}.c" -o -name "${case_name}.sy" \) | LC_ALL=C sort)"
+  if [[ -n "${matches}" ]]; then
+    while IFS= read -r candidate; do
+      [[ -z "${candidate}" ]] && continue
+      match_count=$((match_count + 1))
+      dir_path="${candidate}"
+    done <<EOF
+${matches}
+EOF
+
+    if [[ ${match_count} -eq 1 ]]; then
+      printf '%s\n' "${dir_path}"
+      return
+    fi
+
+    echo "Ambiguous test case token: ${original_token}" >&2
+    echo "${matches}" >&2
+    exit 1
+  fi
+
+  echo "Cannot resolve test target: ${original_token}" >&2
+  exit 1
+}
+
+remove_case_token() {
+  local token="$1"
+  local case_file
+
+  case_file="$(resolve_case_file_path "${token}")"
+  remove_case_if_present "${case_file}"
 }
 
 resolve_case_token() {
@@ -301,16 +423,18 @@ resolve_case_token() {
 
   case_name="$(basename "${normalized}")"
   case_name="${case_name%.c}"
+  case_name="${case_name%.sy}"
 
   if dir_path="$(infer_case_dir "${case_name}")"; then
-    candidate="${dir_path}/${case_name}.c"
-    if [[ -f "${candidate}" ]]; then
-      add_case_if_new "${candidate}"
-      return
-    fi
+    for candidate in "${dir_path}/${case_name}.c" "${dir_path}/${case_name}.sy"; do
+      if [[ -f "${candidate}" ]]; then
+        add_case_if_new "${candidate}"
+        return
+      fi
+    done
   fi
 
-  matches="$(find "${TEST_ROOT}" -maxdepth 2 -type f -name "${case_name}.c" | LC_ALL=C sort)"
+  matches="$(find "${TEST_ROOT}" -maxdepth 3 -type f \( -name "${case_name}.c" -o -name "${case_name}.sy" \) | LC_ALL=C sort)"
   if [[ -n "${matches}" ]]; then
     while IFS= read -r candidate; do
       [[ -z "${candidate}" ]] && continue
@@ -586,7 +710,11 @@ run_err_suite() {
   compiler_path="$(resolve_compiler_for_mode "${suite_mode}")"
 
   for case_file in "$@"; do
-    resolve_case_token "${case_file}"
+    if [[ "${case_file}" == \!* ]]; then
+      remove_case_token "${case_file#!}"
+    else
+      resolve_case_token "${case_file}"
+    fi
   done
 
   if [[ ${#CASES[@]} -eq 0 ]]; then
@@ -602,7 +730,8 @@ run_err_suite() {
   workdir="$(mktemp -d "${WORK_ROOT}/${suite_mode}.XXXXXX")"
 
   for case_file in "${CASES[@]}"; do
-    case_name="$(basename "${case_file}" .c)"
+    case_name="$(basename "${case_file}")"
+    case_name="${case_name%.*}"
 
     raw_errors=()
     while IFS= read -r expected_err; do
@@ -642,11 +771,20 @@ run_err_suite() {
     compiler_cmd=("${compiler_path}" -S -L -o /dev/null "${case_file}")
 
     set +e
-    "${compiler_cmd[@]}" 2>"${stderr_file}" >/dev/null
+    if [[ -n "${TIMEOUT_BIN}" ]]; then
+      "${TIMEOUT_BIN}" --kill-after=5s "${CASE_COMPILE_TIMEOUT}" "${compiler_cmd[@]}" 2>"${stderr_file}" >/dev/null
+    else
+      "${compiler_cmd[@]}" 2>"${stderr_file}" >/dev/null
+    fi
     local exit_code=$?
     set -e
 
-    if [[ ${exit_code} -eq 0 ]]; then
+    if is_timeout_exit "${exit_code}"; then
+      print_case_failure "${case_name}" "compile timed out"
+      record_failure "${case_name}" "compile timed out"
+      SUITE_NG_COUNT=$((SUITE_NG_COUNT + 1))
+      continue
+    elif [[ ${exit_code} -eq 0 ]]; then
       print_case_failure "${case_name}" "expected compile to fail"
       record_failure "${case_name}" "expected compile to fail"
       SUITE_NG_COUNT=$((SUITE_NG_COUNT + 1))
@@ -836,7 +974,11 @@ run_mode_suite() {
   esac
 
   for case_file in "$@"; do
-    resolve_case_token "${case_file}"
+    if [[ "${case_file}" == \!* ]]; then
+      remove_case_token "${case_file#!}"
+    else
+      resolve_case_token "${case_file}"
+    fi
   done
 
   if [[ ${#CASES[@]} -eq 0 ]]; then
@@ -847,7 +989,8 @@ run_mode_suite() {
   workdir="$(mktemp -d "${WORK_ROOT}/${suite_mode}.XXXXXX")"
 
   for case_file in "${CASES[@]}"; do
-    case_name="$(basename "${case_file}" .c)"
+    case_name="$(basename "${case_file}")"
+    case_name="${case_name%.*}"
     case_dir="$(cd "$(dirname "${case_file}")" && pwd)"
     input_file="${case_dir}/${case_name}.in"
     output_file="${case_dir}/${case_name}.out"
@@ -881,7 +1024,17 @@ run_mode_suite() {
 
     compiler_cmd+=(-o "${artifact_file}" "${case_file}")
 
-    if ! run_logged_command "${compiler_cmd[@]}"; then
+    set +e
+    run_logged_timed_command "${CASE_COMPILE_TIMEOUT}" "${compiler_cmd[@]}"
+    exit_code=$?
+    set -e
+
+    if is_timeout_exit "${exit_code}"; then
+      print_case_failure "${case_name}" "compile timed out"
+      record_failure "${case_name}" "compile timed out"
+      SUITE_NG_COUNT=$((SUITE_NG_COUNT + 1))
+      continue
+    elif [[ ${exit_code} -ne 0 ]]; then
       print_case_failure "${case_name}" "compile failed"
       record_failure "${case_name}" "compile failed"
       SUITE_NG_COUNT=$((SUITE_NG_COUNT + 1))
@@ -916,7 +1069,18 @@ run_mode_suite() {
         llvm_link_cmd+=(-DOPT_TEST)
       fi
       llvm_link_cmd+=("${artifact_file}" "${RUNTIME_LIB}")
-      if ! run_logged_command "${llvm_link_cmd[@]}"; then
+
+      set +e
+      run_logged_timed_command "${CASE_LINK_TIMEOUT}" "${llvm_link_cmd[@]}"
+      exit_code=$?
+      set -e
+
+      if is_timeout_exit "${exit_code}"; then
+        print_case_failure "${case_name}" "link timed out"
+        record_failure "${case_name}" "LLVM IR link timed out"
+        SUITE_NG_COUNT=$((SUITE_NG_COUNT + 1))
+        continue
+      elif [[ ${exit_code} -ne 0 ]]; then
         print_case_failure "${case_name}" "link failed"
         record_failure "${case_name}" "LLVM IR link failed"
         SUITE_NG_COUNT=$((SUITE_NG_COUNT + 1))
@@ -939,7 +1103,17 @@ run_mode_suite() {
         continue
       fi
 
-      if ! run_logged_command "${ASM_CC}" -g -o "${bin_file}" "${artifact_file}" "${RUNTIME_LIB}"; then
+      set +e
+      run_logged_timed_command "${CASE_LINK_TIMEOUT}" "${ASM_CC}" -g -o "${bin_file}" "${artifact_file}" "${RUNTIME_LIB}"
+      exit_code=$?
+      set -e
+
+      if is_timeout_exit "${exit_code}"; then
+        print_case_failure "${case_name}" "link timed out"
+        record_failure "${case_name}" "link timed out"
+        SUITE_NG_COUNT=$((SUITE_NG_COUNT + 1))
+        continue
+      elif [[ ${exit_code} -ne 0 ]]; then
         print_case_failure "${case_name}" "link failed"
         record_failure "${case_name}" "link failed"
         SUITE_NG_COUNT=$((SUITE_NG_COUNT + 1))
@@ -965,19 +1139,42 @@ run_mode_suite() {
   set +e
   if [[ -f "${input_file}" ]]; then
       if [[ ${QUIET_ALL_SUCCESS} -eq 1 ]]; then
-        "${run_cmd[@]}" < "${input_file}" > "${result_file}" 2>/dev/null
+        if [[ -n "${TIMEOUT_BIN}" ]]; then
+          "${TIMEOUT_BIN}" --kill-after=5s "${CASE_RUN_TIMEOUT}" "${run_cmd[@]}" < "${input_file}" > "${result_file}" 2>/dev/null
+        else
+          "${run_cmd[@]}" < "${input_file}" > "${result_file}" 2>/dev/null
+        fi
       else
-        "${run_cmd[@]}" < "${input_file}" > "${result_file}"
+        if [[ -n "${TIMEOUT_BIN}" ]]; then
+          "${TIMEOUT_BIN}" --kill-after=5s "${CASE_RUN_TIMEOUT}" "${run_cmd[@]}" < "${input_file}" > "${result_file}"
+        else
+          "${run_cmd[@]}" < "${input_file}" > "${result_file}"
+        fi
       fi
   else
       if [[ ${QUIET_ALL_SUCCESS} -eq 1 ]]; then
-        "${run_cmd[@]}" > "${result_file}" 2>/dev/null
+        if [[ -n "${TIMEOUT_BIN}" ]]; then
+          "${TIMEOUT_BIN}" --kill-after=5s "${CASE_RUN_TIMEOUT}" "${run_cmd[@]}" > "${result_file}" 2>/dev/null
+        else
+          "${run_cmd[@]}" > "${result_file}" 2>/dev/null
+        fi
       else
-        "${run_cmd[@]}" > "${result_file}"
+        if [[ -n "${TIMEOUT_BIN}" ]]; then
+          "${TIMEOUT_BIN}" --kill-after=5s "${CASE_RUN_TIMEOUT}" "${run_cmd[@]}" > "${result_file}"
+        else
+          "${run_cmd[@]}" > "${result_file}"
+        fi
       fi
   fi
   exit_code=$?
   set -e
+
+    if is_timeout_exit "${exit_code}"; then
+      print_case_failure "${case_name}" "run timed out"
+      record_failure "${case_name}" "run timed out"
+      SUITE_NG_COUNT=$((SUITE_NG_COUNT + 1))
+      continue
+    fi
 
     if [[ -s "${result_file}" ]]; then
       last_byte="$(tail -c 1 "${result_file}" | od -An -tx1 | tr -d '[:space:]')"
@@ -1142,6 +1339,8 @@ trap 'rm -rf "${WORK_ROOT}"' EXIT
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
   USE_COLOR=1
 fi
+
+configure_timeout_tool
 
 if [[ ${RUN_ALL} -eq 1 ]]; then
   QUIET_ALL_SUCCESS=1
