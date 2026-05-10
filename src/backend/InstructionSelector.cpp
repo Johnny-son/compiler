@@ -390,6 +390,9 @@ void InstructionSelector::translateCast(const IRInstView & inst)
 				MachineOpcode::FCVT_W_S,
 				{result, value.asUse(), MachineOperand::functionSymbol("rtz")});
 			break;
+		case CastInst::Op::BitCast:
+			machineFunction.emit(MachineOpcode::COPY, {result, value.asUse()});
+			break;
 	}
 	storeValue(result.asUse(), inst.result());
 }

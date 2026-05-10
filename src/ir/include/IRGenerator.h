@@ -147,6 +147,9 @@ protected:
 	Value * decayArrayToPointer(Value * value, const std::string & name = "");
 	bool fillArrayInitializer(ast_node * initNode, Type * type, std::vector<ast_node *> & slots, size_t baseIndex);
 	bool emitArrayInitializerStores(Value * arrayAddr, Type * arrayType, ast_node * initNode);
+	bool emitZeroInitializer(Value * arrayAddr, Type * valueType);
+	bool emitMemsetZero(Value * arrayAddr, Type * valueType);
+	Function * getOrCreateMemsetFunction();
 	bool buildGlobalArrayInitializer(Type * arrayType, ast_node * initNode, std::string & initializerText);
 	bool eval_global_const_float(ast_node * node, float & value);
 	bool buildScalarInitializerText(Type * type, ast_node * initNode, std::string & initializerText);

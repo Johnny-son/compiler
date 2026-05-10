@@ -9,6 +9,7 @@ public:
 	enum class Op {
 		SIToFP,
 		FPToSI,
+		BitCast,
 	};
 
 	CastInst(Function * func, Op op, Value * value, Type * targetType, const std::string & name = "");

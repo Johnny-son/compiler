@@ -11,6 +11,8 @@ const char * opName(CastInst::Op op)
 			return "sitofp";
 		case CastInst::Op::FPToSI:
 			return "fptosi";
+		case CastInst::Op::BitCast:
+			return "bitcast";
 	}
 	return "sitofp";
 }

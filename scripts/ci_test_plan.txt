@@ -14,10 +14,6 @@ ir:
 2023_function
 2025_function
 2026_function
-!2026_function/h_functional/30_many_dimensions.sy
-# 2025_func_030_many_dimensions is kept in the repository but not run by CI by default.
-# Run manually with:
-#   bash scripts/run_ci_tests.sh -ir test/contesttestcases/25_func_30/2025_func_030_many_dimensions.c --compiler ./build/compiler
 test/stage1_params/param_basic.c
 test/stage1_params/param_multi.c
 test/stage1_params/param_assign.c
@@ -40,7 +36,6 @@ asm:
 2023_function
 2025_function
 2026_function
-!2026_function/h_functional/30_many_dimensions.sy
 test/stage1_params/param_basic.c
 test/stage1_params/param_multi.c
 test/stage1_params/param_assign.c

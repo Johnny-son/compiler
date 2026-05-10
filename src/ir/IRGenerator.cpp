@@ -21,6 +21,8 @@
 
 namespace {
 
+constexpr int32_t kMemsetZeroThresholdBytes = 1024;
+
 // 统一格式化IR错误详情，供可变参数错误上报复用
 std::string ir_format_detail(const char * format, va_list args)
 {
@@ -903,7 +905,7 @@ bool IRGenerator::fillArrayInitializer(ast_node * initNode, Type * type, std::ve
 bool IRGenerator::emitArrayInitializerStores(Value * arrayAddr, Type * arrayType, ast_node * initNode)
 {
 	if (isZeroInitializer(initNode, arrayType)) {
-		return builder.createStore(new ZeroInitializer(arrayType), arrayAddr) != nullptr;
+		return emitZeroInitializer(arrayAddr, arrayType);
 	}
 
 	const size_t total = getFlattenElementCount(arrayType);
@@ -949,6 +951,67 @@ bool IRGenerator::emitArrayInitializerStores(Value * arrayAddr, Type * arrayType
 	}
 
 	return true;
+}
+
+bool IRGenerator::emitZeroInitializer(Value * arrayAddr, Type * valueType)
+{
+	if (arrayAddr == nullptr || valueType == nullptr) {
+		return false;
+	}
+
+	if (valueType->isArrayType() && valueType->getSize() >= kMemsetZeroThresholdBytes) {
+		return emitMemsetZero(arrayAddr, valueType);
+	}
+
+	return builder.createStore(new ZeroInitializer(valueType), arrayAddr) != nullptr;
+}
+
+bool IRGenerator::emitMemsetZero(Value * arrayAddr, Type * valueType)
+{
+	if (arrayAddr == nullptr || valueType == nullptr || valueType->getSize() <= 0) {
+		return false;
+	}
+
+	Function * memsetFunc = getOrCreateMemsetFunction();
+	if (memsetFunc == nullptr) {
+		return builder.createStore(new ZeroInitializer(valueType), arrayAddr) != nullptr;
+	}
+
+	auto * intPtrType = const_cast<PointerType *>(PointerType::get(IntegerType::getTypeInt()));
+	Value * memsetPtr = arrayAddr;
+	if (memsetPtr->getType() != intPtrType) {
+		memsetPtr = builder.createBitCast(memsetPtr, intPtrType, "memset.ptr");
+		if (memsetPtr == nullptr) {
+			return false;
+		}
+	}
+
+	return builder.createCall(
+			   memsetFunc,
+			   {memsetPtr, module->newConstInt(0), module->newConstInt(valueType->getSize())},
+			   "memset.call") != nullptr;
+}
+
+Function * IRGenerator::getOrCreateMemsetFunction()
+{
+	auto * intType = IntegerType::getTypeInt();
+	auto * intPtrType = const_cast<PointerType *>(PointerType::get(intType));
+
+	Function * existing = module->findFunction("memset");
+	if (existing != nullptr) {
+		if (existing->getReturnType() == intPtrType && existing->getParams().size() == 3 &&
+			existing->getParams()[0]->getType() == intPtrType && existing->getParams()[1]->getType() == intType &&
+			existing->getParams()[2]->getType() == intType) {
+			return existing;
+		}
+		return nullptr;
+	}
+
+	return module->newFunction(
+		"memset",
+		intPtrType,
+		{new FormalParam{intPtrType, ""}, new FormalParam{intType, ""}, new FormalParam{intType, ""}},
+		true);
 }
 
 bool IRGenerator::buildScalarInitializerText(Type * type, ast_node * initNode, std::string & initializerText)
@@ -1770,7 +1833,7 @@ bool IRGenerator::ir_variable_declare(ast_node * node)
 
 	if (dimsNode != nullptr) {
 		if (initExpr == nullptr) {
-			return builder.createStore(new ZeroInitializer(declaredType), node->val) != nullptr;
+			return emitZeroInitializer(node->val, declaredType);
 		}
 		return emitArrayInitializerStores(node->val, declaredType, initExpr);
 	}

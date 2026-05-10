@@ -177,6 +177,11 @@ CastInst * IRBuilder::createFPToSI(Value * value, Type * targetType, const std::
 	return insert(new CastInst(currentFunction(), CastInst::Op::FPToSI, value, targetType), name);
 }
 
+CastInst * IRBuilder::createBitCast(Value * value, Type * targetType, const std::string & name)
+{
+	return insert(new CastInst(currentFunction(), CastInst::Op::BitCast, value, targetType), name);
+}
+
 GetElementPtrInst * IRBuilder::createGEP(Value * basePtr, const std::vector<Value *> & indices, const std::string & name)
 {
 	return insert(new GetElementPtrInst(currentFunction(), basePtr, indices), name);

@@ -59,6 +59,7 @@ public:
 	ZExtInst * createZExt(Value * value, Type * targetType, const std::string & name = "");
 	CastInst * createSIToFP(Value * value, Type * targetType, const std::string & name = "");
 	CastInst * createFPToSI(Value * value, Type * targetType, const std::string & name = "");
+	CastInst * createBitCast(Value * value, Type * targetType, const std::string & name = "");
 	GetElementPtrInst * createGEP(Value * basePtr, const std::vector<Value *> & indices, const std::string & name = "");
 	CallInst * createCall(Function * callee, const std::vector<Value *> & args, const std::string & name = "");
 	PhiInst * createPhi(Type * type, const std::string & name = "");
