@@ -2,7 +2,7 @@
 
 #include "AllocaInst.h"
 
-#include "ir/Types/PointerType.h"
+#include "PointerType.h"
 
 AllocaInst::AllocaInst(Function * func, Type * allocatedType, const std::string & name)
 	: Instruction(func, const_cast<PointerType *>(PointerType::get(allocatedType))), allocatedType(allocatedType)

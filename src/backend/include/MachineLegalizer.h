@@ -1,7 +1,7 @@
 #pragma once
 
-#include "backend/include/FrameLayout.h"
-#include "backend/include/MachineIR.h"
+#include "FrameLayout.h"
+#include "MachineIR.h"
 
 class MachineLegalizer {
 

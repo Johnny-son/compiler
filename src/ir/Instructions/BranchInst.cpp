@@ -3,7 +3,7 @@
 #include "BranchInst.h"
 
 #include "BasicBlock.h"
-#include "ir/Types/VoidType.h"
+#include "VoidType.h"
 
 BranchInst::BranchInst(Function * func, BasicBlock * target)
 	: Instruction(func, VoidType::getType()), trueTarget(target)

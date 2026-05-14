@@ -2,7 +2,7 @@
 
 #include "ICmpInst.h"
 
-#include "ir/Types/IntegerType.h"
+#include "IntegerType.h"
 
 namespace {
 

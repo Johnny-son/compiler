@@ -2,8 +2,8 @@
 
 #include "StoreInst.h"
 
-#include "ir/Types/VoidType.h"
-#include "ir/Values/GlobalVariable.h"
+#include "VoidType.h"
+#include "GlobalVariable.h"
 
 StoreInst::StoreInst(Function * func, Value * value, Value * ptr)
 	: Instruction(func, VoidType::getType())

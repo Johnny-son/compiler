@@ -5,19 +5,19 @@
 #include <vector>
 
 #include "IRGenerator.h"
-#include "ir/include/Function.h"
-#include "ir/include/Type.h"
-#include "ir/include/Value.h"
-#include "ir/Types/ArrayType.h"
-#include "ir/Types/FloatType.h"
-#include "ir/Types/IntegerType.h"
-#include "ir/Types/PointerType.h"
-#include "ir/Values/ConstFloat.h"
-#include "ir/Values/ConstInt.h"
-#include "ir/Values/FormalParam.h"
-#include "ir/Values/GlobalVariable.h"
-#include "ir/Values/ZeroInitializer.h"
-#include "utils/Status.h"
+#include "Function.h"
+#include "Type.h"
+#include "Value.h"
+#include "ArrayType.h"
+#include "FloatType.h"
+#include "IntegerType.h"
+#include "PointerType.h"
+#include "ConstFloat.h"
+#include "ConstInt.h"
+#include "FormalParam.h"
+#include "GlobalVariable.h"
+#include "ZeroInitializer.h"
+#include "Status.h"
 
 namespace {
 

@@ -7,8 +7,8 @@
 #include "CSTVisitor.h"
 #include "AST.h"
 #include "AttrType.h"
-#include "ir/Types/FloatType.h"
-#include "ir/Types/IntegerType.h"
+#include "FloatType.h"
+#include "IntegerType.h"
 
 #define Instanceof(res, type, var) auto res = dynamic_cast<type>(var)
 

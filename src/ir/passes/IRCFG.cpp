@@ -6,9 +6,9 @@
 #include <deque>
 
 #include "BasicBlock.h"
-#include "ir/Instructions/BranchInst.h"
-#include "ir/include/Function.h"
-#include "ir/include/Instruction.h"
+#include "BranchInst.h"
+#include "Function.h"
+#include "Instruction.h"
 
 namespace {
 

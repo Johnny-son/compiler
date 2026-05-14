@@ -1,4 +1,4 @@
-#include "backend/include/BackendDriver.h"
+#include "BackendDriver.h"
 
 #include <cctype>
 #include <cstdint>
@@ -8,15 +8,15 @@
 #include <string>
 #include <vector>
 
-#include "backend/include/Asm.h"
-#include "backend/include/FrameLayout.h"
-#include "backend/include/GraphColoringRegisterAllocator.h"
-#include "backend/include/IRAdapter.h"
-#include "backend/include/InstructionSelector.h"
-#include "backend/include/MachineAsmLowering.h"
-#include "ir/include/Module.h"
-#include "ir/include/Type.h"
-#include "ir/Values/GlobalVariable.h"
+#include "Asm.h"
+#include "FrameLayout.h"
+#include "GraphColoringRegisterAllocator.h"
+#include "IRAdapter.h"
+#include "InstructionSelector.h"
+#include "MachineAsmLowering.h"
+#include "Module.h"
+#include "Type.h"
+#include "GlobalVariable.h"
 
 namespace {
 

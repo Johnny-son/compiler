@@ -1,4 +1,4 @@
-#include "backend/include/MachineLegalizer.h"
+#include "MachineLegalizer.h"
 
 #include <utility>
 #include <vector>

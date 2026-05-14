@@ -6,7 +6,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "backend/include/IRAdapter.h"
+#include "IRAdapter.h"
 
 enum class StackObjectKind : std::int8_t {
 	SavedReturnAddress,

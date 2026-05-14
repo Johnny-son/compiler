@@ -1,8 +1,8 @@
 #pragma once
 
-#include "backend/include/Asm.h"
-#include "backend/include/FrameLayout.h"
-#include "backend/include/MachineIR.h"
+#include "Asm.h"
+#include "FrameLayout.h"
+#include "MachineIR.h"
 
 class MachineAsmLowering {
 

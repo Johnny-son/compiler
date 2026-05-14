@@ -3,7 +3,7 @@
 #include <algorithm>
 
 #include "Value.h"
-#include "ir/Instructions/PhiInst.h"
+#include "PhiInst.h"
 #include "Use.h"
 #include "User.h"
 

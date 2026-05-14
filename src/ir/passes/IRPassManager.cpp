@@ -2,7 +2,7 @@
 
 #include "IRPassManager.h"
 
-#include "ir/include/Module.h"
+#include "Module.h"
 
 bool IRPassManager::run(Module & module)
 {

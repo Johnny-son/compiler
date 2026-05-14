@@ -10,13 +10,13 @@
 #include <string>
 #include <vector>
 
-#include "ir/Types/FloatType.h"
-#include "ir/Types/IntegerType.h"
-#include "ir/Types/PointerType.h"
-#include "ir/Types/VoidType.h"
-#include "ir/Values/FormalParam.h"
-#include "symboltable/ScopeStack.h"
-#include "utils/Status.h"
+#include "FloatType.h"
+#include "IntegerType.h"
+#include "PointerType.h"
+#include "VoidType.h"
+#include "FormalParam.h"
+#include "ScopeStack.h"
+#include "Status.h"
 
 namespace {
 

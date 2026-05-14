@@ -1,8 +1,8 @@
-#include "backend/include/GraphColoringRegisterAllocator.h"
+#include "GraphColoringRegisterAllocator.h"
 
-#include "backend/include/MachineCFG.h"
-#include "backend/include/MachineLegalizer.h"
-#include "backend/include/MachineLiveness.h"
+#include "MachineCFG.h"
+#include "MachineLegalizer.h"
+#include "MachineLiveness.h"
 
 #include <algorithm>
 #include <map>

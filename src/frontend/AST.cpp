@@ -4,9 +4,9 @@
 
 #include "AST.h"
 #include "AttrType.h"
-#include "ir/Types/FloatType.h"
-#include "ir/Types/IntegerType.h"
-#include "ir/Types/VoidType.h"
+#include "FloatType.h"
+#include "IntegerType.h"
+#include "VoidType.h"
 
 /// @brief 创建指定节点类型的节点
 /// @param _node_type 节点类型

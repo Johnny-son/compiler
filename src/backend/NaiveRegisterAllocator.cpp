@@ -1,4 +1,4 @@
-#include "backend/include/NaiveRegisterAllocator.h"
+#include "NaiveRegisterAllocator.h"
 
 namespace {
 

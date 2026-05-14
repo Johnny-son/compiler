@@ -3,7 +3,7 @@
 #pragma once
 
 #include "Constant.h"
-#include "ir/Types/IntegerType.h"
+#include "IntegerType.h"
 
 ///
 /// @brief 整型常量类

@@ -5,10 +5,10 @@
 #include <vector>
 #include <unordered_map>
 
-#include "ir/Values/ConstInt.h"
-#include "ir/Values/ConstFloat.h"
+#include "ConstInt.h"
+#include "ConstFloat.h"
 #include "Type.h"
-#include "ir/Values/GlobalVariable.h"
+#include "GlobalVariable.h"
 #include "Function.h"
 
 class ScopeStack;

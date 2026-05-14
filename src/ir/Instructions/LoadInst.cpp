@@ -2,8 +2,8 @@
 
 #include "LoadInst.h"
 
-#include "ir/Types/PointerType.h"
-#include "ir/Values/GlobalVariable.h"
+#include "PointerType.h"
+#include "GlobalVariable.h"
 
 namespace {
 

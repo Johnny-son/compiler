@@ -5,19 +5,19 @@
 #include <algorithm>
 
 #include "BasicBlock.h"
-#include "ir/Instructions/AllocaInst.h"
-#include "ir/Instructions/BinaryInst.h"
-#include "ir/Instructions/CallInst.h"
-#include "ir/Instructions/CastInst.h"
-#include "ir/Instructions/FCmpInst.h"
-#include "ir/Instructions/GetElementPtrInst.h"
-#include "ir/Instructions/ICmpInst.h"
-#include "ir/Instructions/LoadInst.h"
-#include "ir/Instructions/PhiInst.h"
-#include "ir/Instructions/ZExtInst.h"
-#include "ir/include/Function.h"
-#include "ir/include/Instruction.h"
-#include "ir/include/Module.h"
+#include "AllocaInst.h"
+#include "BinaryInst.h"
+#include "CallInst.h"
+#include "CastInst.h"
+#include "FCmpInst.h"
+#include "GetElementPtrInst.h"
+#include "ICmpInst.h"
+#include "LoadInst.h"
+#include "PhiInst.h"
+#include "ZExtInst.h"
+#include "Function.h"
+#include "Instruction.h"
+#include "Module.h"
 
 namespace {
 

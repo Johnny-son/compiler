@@ -7,8 +7,8 @@
 #include <vector>
 
 #include "GlobalValue.h"
-#include "ir/Types/FunctionType.h"
-#include "ir/Values/FormalParam.h"
+#include "FunctionType.h"
+#include "FormalParam.h"
 
 class BasicBlock;
 

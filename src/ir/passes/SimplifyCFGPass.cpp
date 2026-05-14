@@ -7,13 +7,13 @@
 
 #include "BasicBlock.h"
 #include "IRCFG.h"
-#include "ir/Instructions/BranchInst.h"
-#include "ir/Instructions/PhiInst.h"
-#include "ir/Values/ConstInt.h"
-#include "ir/include/Function.h"
-#include "ir/include/Instruction.h"
-#include "ir/include/Module.h"
-#include "ir/include/User.h"
+#include "BranchInst.h"
+#include "PhiInst.h"
+#include "ConstInt.h"
+#include "Function.h"
+#include "Instruction.h"
+#include "Module.h"
+#include "User.h"
 
 namespace {
 

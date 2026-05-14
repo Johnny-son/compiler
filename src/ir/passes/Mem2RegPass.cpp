@@ -9,16 +9,16 @@
 
 #include "BasicBlock.h"
 #include "IRCFG.h"
-#include "ir/Instructions/AllocaInst.h"
-#include "ir/Instructions/LoadInst.h"
-#include "ir/Instructions/PhiInst.h"
-#include "ir/Instructions/StoreInst.h"
-#include "ir/Types/FloatType.h"
-#include "ir/include/Function.h"
-#include "ir/include/Instruction.h"
-#include "ir/include/Module.h"
-#include "ir/include/Type.h"
-#include "ir/include/Value.h"
+#include "AllocaInst.h"
+#include "LoadInst.h"
+#include "PhiInst.h"
+#include "StoreInst.h"
+#include "FloatType.h"
+#include "Function.h"
+#include "Instruction.h"
+#include "Module.h"
+#include "Type.h"
+#include "Value.h"
 
 namespace {
 

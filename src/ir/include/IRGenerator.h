@@ -5,7 +5,7 @@
 #include <utility>
 #include <vector>
 
-#include "frontend/include/AST.h"
+#include "AST.h"
 #include "Module.h"
 #include "IRBuilder.h"
 

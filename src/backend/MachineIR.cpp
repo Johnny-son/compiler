@@ -1,6 +1,6 @@
-#include "backend/include/MachineIR.h"
+#include "MachineIR.h"
 
-#include "ir/include/Value.h"
+#include "Value.h"
 
 #include <algorithm>
 #include <sstream>

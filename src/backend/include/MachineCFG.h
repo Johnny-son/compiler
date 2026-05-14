@@ -1,6 +1,6 @@
 #pragma once
 
-#include "backend/include/MachineIR.h"
+#include "MachineIR.h"
 
 #include <string>
 

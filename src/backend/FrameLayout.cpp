@@ -1,10 +1,10 @@
-#include "backend/include/FrameLayout.h"
+#include "FrameLayout.h"
 
 #include <algorithm>
 
-#include "ir/include/Function.h"
-#include "ir/include/Type.h"
-#include "ir/Instructions/AllocaInst.h"
+#include "Function.h"
+#include "Type.h"
+#include "AllocaInst.h"
 
 namespace {
 

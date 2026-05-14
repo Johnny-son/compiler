@@ -6,17 +6,17 @@
 #include <cstdint>
 
 #include "BasicBlock.h"
-#include "ir/Instructions/BinaryInst.h"
-#include "ir/Instructions/FCmpInst.h"
-#include "ir/Instructions/ICmpInst.h"
-#include "ir/Instructions/ZExtInst.h"
-#include "ir/Values/ConstFloat.h"
-#include "ir/Values/ConstInt.h"
-#include "ir/include/Function.h"
-#include "ir/include/Instruction.h"
-#include "ir/include/Module.h"
-#include "ir/include/Type.h"
-#include "ir/include/Value.h"
+#include "BinaryInst.h"
+#include "FCmpInst.h"
+#include "ICmpInst.h"
+#include "ZExtInst.h"
+#include "ConstFloat.h"
+#include "ConstInt.h"
+#include "Function.h"
+#include "Instruction.h"
+#include "Module.h"
+#include "Type.h"
+#include "Value.h"
 
 namespace {
 

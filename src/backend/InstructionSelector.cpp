@@ -1,4 +1,4 @@
-#include "backend/include/InstructionSelector.h"
+#include "InstructionSelector.h"
 
 #include <algorithm>
 #include <cctype>
@@ -8,17 +8,17 @@
 
 #include "BasicBlock.h"
 #include "Function.h"
-#include "ir/include/Type.h"
-#include "ir/Instructions/AllocaInst.h"
-#include "ir/Instructions/BinaryInst.h"
-#include "ir/Instructions/CastInst.h"
-#include "ir/Instructions/FCmpInst.h"
-#include "ir/Instructions/GetElementPtrInst.h"
-#include "ir/Instructions/ICmpInst.h"
-#include "ir/Instructions/PhiInst.h"
-#include "ir/Types/ArrayType.h"
-#include "ir/Types/PointerType.h"
-#include "ir/Values/ZeroInitializer.h"
+#include "Type.h"
+#include "AllocaInst.h"
+#include "BinaryInst.h"
+#include "CastInst.h"
+#include "FCmpInst.h"
+#include "GetElementPtrInst.h"
+#include "ICmpInst.h"
+#include "PhiInst.h"
+#include "ArrayType.h"
+#include "PointerType.h"
+#include "ZeroInitializer.h"
 
 namespace {
 

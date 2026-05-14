@@ -2,9 +2,9 @@
 
 #include "GetElementPtrInst.h"
 
-#include "ir/Types/ArrayType.h"
-#include "ir/Types/PointerType.h"
-#include "ir/Values/GlobalVariable.h"
+#include "ArrayType.h"
+#include "PointerType.h"
+#include "GlobalVariable.h"
 
 namespace {
 

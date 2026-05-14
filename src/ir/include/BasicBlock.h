@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "Value.h"
-#include "ir/Types/LabelType.h"
+#include "LabelType.h"
 
 class Function;
 class Instruction;

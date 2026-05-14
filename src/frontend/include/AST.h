@@ -7,8 +7,8 @@
 #include <vector>
 
 #include "AttrType.h"
-#include "ir/include/Value.h"
-#include "ir/Types/VoidType.h"
+#include "Value.h"
+#include "VoidType.h"
 
 ///
 // AST节点的类型。C++专门因为枚举类来区分C语言的结构体

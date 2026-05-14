@@ -10,16 +10,16 @@
 
 #include "BasicBlock.h"
 #include "IRCFG.h"
-#include "ir/Instructions/BranchInst.h"
-#include "ir/Instructions/PhiInst.h"
-#include "ir/Instructions/ReturnInst.h"
-#include "ir/include/Function.h"
-#include "ir/include/Instruction.h"
-#include "ir/include/Module.h"
-#include "ir/include/Type.h"
-#include "ir/include/Use.h"
-#include "ir/include/User.h"
-#include "ir/include/Value.h"
+#include "BranchInst.h"
+#include "PhiInst.h"
+#include "ReturnInst.h"
+#include "Function.h"
+#include "Instruction.h"
+#include "Module.h"
+#include "Type.h"
+#include "Use.h"
+#include "User.h"
+#include "Value.h"
 
 namespace {
 

@@ -3,11 +3,11 @@
 #include "TrivialPhiPass.h"
 
 #include "BasicBlock.h"
-#include "ir/Instructions/PhiInst.h"
-#include "ir/include/Function.h"
-#include "ir/include/Instruction.h"
-#include "ir/include/Module.h"
-#include "ir/include/Value.h"
+#include "PhiInst.h"
+#include "Function.h"
+#include "Instruction.h"
+#include "Module.h"
+#include "Value.h"
 
 namespace {
 

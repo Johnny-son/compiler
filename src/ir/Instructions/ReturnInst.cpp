@@ -2,7 +2,7 @@
 
 #include "ReturnInst.h"
 
-#include "ir/Types/VoidType.h"
+#include "VoidType.h"
 
 ReturnInst::ReturnInst(Function * func) : Instruction(func, VoidType::getType())
 {}

@@ -3,8 +3,8 @@
 #include <string>
 #include <unordered_map>
 
-#include "backend/include/FrameLayout.h"
-#include "backend/include/MachineIR.h"
+#include "FrameLayout.h"
+#include "MachineIR.h"
 
 class BasicBlock;
 

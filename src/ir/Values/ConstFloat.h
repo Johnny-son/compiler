@@ -9,7 +9,7 @@
 #include <string>
 
 #include "Constant.h"
-#include "ir/Types/FloatType.h"
+#include "FloatType.h"
 
 class ConstFloat : public Constant {
 public:

@@ -1,20 +1,20 @@
 #include <iostream>
 #include <string>
 #include <getopt.h>
-#include "utils/Status.h"
-#include "frontend/include/AST.h"
-#include "frontend/include/ASTGenerator.h"
-#include "frontend/include/Graph.h"
-#include "ir/include/Module.h"
-#include "ir/include/IRGenerator.h"
-#include "ir/passes/ConstantFoldPass.h"
-#include "ir/passes/DCEPass.h"
-#include "ir/passes/IRPassManager.h"
-#include "ir/passes/Mem2RegPass.h"
-#include "ir/passes/SimplifyCFGPass.h"
-#include "ir/passes/TrivialPhiPass.h"
-#include "ir/passes/VerifyPass.h"
-#include "backend/include/BackendDriver.h"
+#include "Status.h"
+#include "AST.h"
+#include "ASTGenerator.h"
+#include "Graph.h"
+#include "Module.h"
+#include "IRGenerator.h"
+#include "ConstantFoldPass.h"
+#include "DCEPass.h"
+#include "IRPassManager.h"
+#include "Mem2RegPass.h"
+#include "SimplifyCFGPass.h"
+#include "TrivialPhiPass.h"
+#include "VerifyPass.h"
+#include "BackendDriver.h"
 
 using namespace std;
 
