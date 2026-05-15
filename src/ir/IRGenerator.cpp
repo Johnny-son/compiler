@@ -16,6 +16,7 @@
 #include "ConstInt.h"
 #include "FormalParam.h"
 #include "GlobalVariable.h"
+#include "VoidType.h"
 #include "ZeroInitializer.h"
 #include "Status.h"
 
@@ -76,6 +77,7 @@ IRGenerator::IRGenerator(ast_node * _root, Module * _module) : root(_root), modu
 	/* 叶子节点 */
 	ast2ir_handlers[ast_operator_type::AST_OP_LEAF_LITERAL_UINT] = &IRGenerator::ir_leaf_node_uint;
 	ast2ir_handlers[ast_operator_type::AST_OP_LEAF_LITERAL_FLOAT] = &IRGenerator::ir_leaf_node_float;
+	ast2ir_handlers[ast_operator_type::AST_OP_LEAF_LITERAL_STRING] = &IRGenerator::ir_leaf_node_string;
 	ast2ir_handlers[ast_operator_type::AST_OP_LEAF_VAR_ID] = &IRGenerator::ir_leaf_node_var_id;
 	ast2ir_handlers[ast_operator_type::AST_OP_LEAF_TYPE] = &IRGenerator::ir_leaf_node_type;
 	ast2ir_handlers[ast_operator_type::AST_OP_ARRAY_ACCESS] = &IRGenerator::ir_array_access;
@@ -501,6 +503,12 @@ bool IRGenerator::ir_leaf_node_float(ast_node * node)
 {
 	node->val = module->newConstFloat(node->float_val);
 	return true;
+}
+
+bool IRGenerator::ir_leaf_node_string(ast_node * node)
+{
+	report_ir_error("E1204", node != nullptr ? node->line_no : -1, "语义检查", "字符串字面量目前只支持作为 putf 的格式串");
+	return false;
 }
 
 // 标识符叶子节点翻译成线性中间IR，变量声明的不走这个语句
@@ -2143,6 +2151,121 @@ bool IRGenerator::eval_global_const_float(ast_node * node, float & value)
 	}
 }
 
+bool IRGenerator::ir_putf_call(ast_node * node)
+{
+	ast_node * paramsNode = node->sons[1];
+	const auto & params = paramsNode->sons;
+	const int64_t lineno = node->line_no;
+	if (params.empty()) {
+		report_ir_error("E1201", lineno, "参数检查", "函数(putf)至少需要一个格式串参数");
+		return false;
+	}
+	if (params[0] == nullptr || params[0]->node_type != ast_operator_type::AST_OP_LEAF_LITERAL_STRING) {
+		report_ir_error("E1202", lineno, "参数检查", "函数(putf)第一个参数必须是字符串字面量");
+		return false;
+	}
+
+	Function * putchFunc = module->findFunction("putch");
+	Function * putintFunc = module->findFunction("putint");
+	Function * putfloatFunc = module->findFunction("putfloat");
+	if (putchFunc == nullptr || putintFunc == nullptr || putfloatFunc == nullptr) {
+		report_ir_error("E1200", lineno, "语义检查", "运行库输出函数未声明，无法降低 putf");
+		return false;
+	}
+
+	struct PutfEvent {
+		bool usesArgument = false;
+		char specifier = '\0';
+		unsigned char outputChar = 0;
+	};
+
+	std::vector<PutfEvent> events;
+	std::size_t expectedArgCount = 0;
+	const std::string & format = params[0]->name;
+	for (std::size_t index = 0; index < format.size(); ++index) {
+		unsigned char ch = static_cast<unsigned char>(format[index]);
+		if (ch != '%') {
+			events.push_back(PutfEvent{false, '\0', ch});
+			continue;
+		}
+
+		if (index + 1 >= format.size()) {
+			report_ir_error("E1205", lineno, "格式检查", "函数(putf)格式串中存在悬空的%%");
+			return false;
+		}
+
+		char specifier = format[++index];
+		if (specifier == '%') {
+			events.push_back(PutfEvent{false, '\0', static_cast<unsigned char>('%')});
+			continue;
+		}
+		if (specifier != 'd' && specifier != 'c' && specifier != 'f') {
+			report_ir_error("E1205", lineno, "格式检查", "函数(putf)不支持的格式说明符%%%c", specifier);
+			return false;
+		}
+		events.push_back(PutfEvent{true, specifier, 0});
+		++expectedArgCount;
+	}
+
+	const std::size_t actualArgCount = params.size() - 1;
+	if (actualArgCount != expectedArgCount) {
+		report_ir_error(
+			"E1201",
+			lineno,
+			"参数检查",
+			"函数(putf)格式串需要%zu个实参，实际%zu个",
+			expectedArgCount,
+			actualArgCount);
+		return false;
+	}
+
+	std::vector<Value *> argValues;
+	argValues.reserve(actualArgCount);
+	for (std::size_t index = 1; index < params.size(); ++index) {
+		ast_node * temp = ir_visit_ast_node(params[index]);
+		if (!temp) {
+			return false;
+		}
+		Value * realValue = emitRValue(temp->val, "putf.arg");
+		if (realValue == nullptr) {
+			return false;
+		}
+		argValues.push_back(realValue);
+	}
+
+	std::size_t argIndex = 0;
+	for (const auto & event: events) {
+		if (!event.usesArgument) {
+			node->val = builder.createCall(putchFunc, {module->newConstInt(static_cast<int32_t>(event.outputChar))}, "");
+			continue;
+		}
+
+		Value * argValue = argValues[argIndex++];
+		if (event.specifier == 'd') {
+			argValue = convertValueToType(argValue, IntegerType::getTypeInt(), "putf.d");
+			if (argValue == nullptr) {
+				return false;
+			}
+			node->val = builder.createCall(putintFunc, {argValue}, "");
+		} else if (event.specifier == 'c') {
+			argValue = convertValueToType(argValue, IntegerType::getTypeInt(), "putf.c");
+			if (argValue == nullptr) {
+				return false;
+			}
+			node->val = builder.createCall(putchFunc, {argValue}, "");
+		} else {
+			argValue = convertValueToType(argValue, FloatType::getTypeFloat(), "putf.f");
+			if (argValue == nullptr) {
+				return false;
+			}
+			node->val = builder.createCall(putfloatFunc, {argValue}, "");
+		}
+	}
+
+	node->type = VoidType::getType();
+	return true;
+}
+
 // 函数调用AST节点翻译成线性中间IR
 bool IRGenerator::ir_function_call(ast_node * node)
 {
@@ -2171,6 +2294,9 @@ bool IRGenerator::ir_function_call(ast_node * node)
 	// 第二个节点：实参列表节点
 
 	ast_node * paramsNode = node->sons[1];
+	if (funcName == "putf") {
+		return ir_putf_call(node);
+	}
 
 	// 根据函数名查找函数，看是否存在。函数签名应已在编译单元阶段完成预声明
 	auto calledFunction = module->findFunction(funcName);

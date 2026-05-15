@@ -1,6 +1,7 @@
 // 抽象语法树AST管理的实现
 #include <cstdint>
 #include <string>
+#include <utility>
 
 #include "AST.h"
 #include "AttrType.h"
@@ -37,6 +38,15 @@ ast_node::ast_node(digit_real_attr attr)
 	float_val = static_cast<float>(attr.val);
 }
 
+/// @brief 针对字符串字面量的构造函数
+/// @param text 已解码的字符串内容，不包含外层引号
+/// @param _line_no 行号
+ast_node::ast_node(std::string text, int64_t _line_no, bool /*is_string_literal*/)
+	: ast_node(ast_operator_type::AST_OP_LEAF_LITERAL_STRING, VoidType::getType(), _line_no)
+{
+	name = std::move(text);
+}
+
 /// @brief 针对标识符ID的叶子构造函数
 /// @param attr 字符型字面量
 ast_node::ast_node(var_id_attr attr) : ast_node(ast_operator_type::AST_OP_LEAF_VAR_ID, VoidType::getType(), attr.lineno)
@@ -62,6 +72,7 @@ bool ast_node::isLeafNode()
 	switch (this->node_type) {
 		case ast_operator_type::AST_OP_LEAF_LITERAL_UINT:
 		case ast_operator_type::AST_OP_LEAF_LITERAL_FLOAT:
+		case ast_operator_type::AST_OP_LEAF_LITERAL_STRING:
 		case ast_operator_type::AST_OP_LEAF_VAR_ID:
 		case ast_operator_type::AST_OP_LEAF_TYPE:
 			is_leaf = true;
@@ -103,6 +114,16 @@ ast_node * ast_node::New(digit_int_attr attr)
 ast_node * ast_node::New(digit_real_attr attr)
 {
 	ast_node * node = new ast_node(attr);
+
+	return node;
+}
+
+/// @brief 创建字符串字面量的叶子节点
+/// @param text 已解码的字符串内容，不包含外层引号
+/// @param line_no 行号
+ast_node * ast_node::NewStringLiteral(std::string text, int64_t lineno)
+{
+	ast_node * node = new ast_node(std::move(text), lineno, true);
 
 	return node;
 }

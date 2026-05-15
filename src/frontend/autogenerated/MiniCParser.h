@@ -12,24 +12,25 @@
 class  MiniCParser : public antlr4::Parser {
 public:
   enum {
-    T_L_PAREN = 1, T_R_PAREN = 2, T_SEMICOLON = 3, T_L_BRACE = 4, T_R_BRACE = 5, 
-    T_L_BRACKET = 6, T_R_BRACKET = 7, T_ASSIGN = 8, T_COMMA = 9, T_INC = 10, 
-    T_DEC = 11, T_EQ = 12, T_NE = 13, T_LE = 14, T_GE = 15, T_LT = 16, T_GT = 17, 
-    T_LAND = 18, T_LOR = 19, T_ADD = 20, T_SUB = 21, T_MUL = 22, T_DIV = 23, 
-    T_MOD = 24, T_NOT = 25, T_IF = 26, T_ELSE = 27, T_WHILE = 28, T_FOR = 29, 
-    T_BREAK = 30, T_CONTINUE = 31, T_RETURN = 32, T_INT = 33, T_FLOAT = 34, 
-    T_CONST = 35, T_STATIC = 36, T_VOID = 37, T_ID = 38, T_FLOAT_LITERAL = 39, 
-    T_DIGIT = 40, LINE_COMMENT = 41, BLOCK_COMMENT = 42, WS = 43
+    T_L_PAREN = 1, T_R_PAREN = 2, T_SEMICOLON = 3, T_L_BRACE = 4, T_R_BRACE = 5,
+    T_L_BRACKET = 6, T_R_BRACKET = 7, T_ASSIGN = 8, T_COMMA = 9, T_INC = 10,
+    T_DEC = 11, T_EQ = 12, T_NE = 13, T_LE = 14, T_GE = 15, T_LT = 16, T_GT = 17,
+    T_LAND = 18, T_LOR = 19, T_ADD = 20, T_SUB = 21, T_MUL = 22, T_DIV = 23,
+    T_MOD = 24, T_NOT = 25, T_IF = 26, T_ELSE = 27, T_WHILE = 28, T_FOR = 29,
+    T_BREAK = 30, T_CONTINUE = 31, T_RETURN = 32, T_INT = 33, T_FLOAT = 34,
+    T_CONST = 35, T_STATIC = 36, T_VOID = 37, T_ID = 38, T_STRING_LITERAL = 39,
+    T_FLOAT_LITERAL = 40, T_DIGIT = 41, LINE_COMMENT = 42, BLOCK_COMMENT = 43,
+    WS = 44
   };
 
   enum {
-    RuleCompUnit = 0, RuleFuncDef = 1, RuleFuncType = 2, RuleFuncFParams = 3, 
-    RuleFuncFParam = 4, RuleFuncArrayDims = 5, RuleBlock = 6, RuleBlockItemList = 7, 
-    RuleBlockItem = 8, RuleVarDecl = 9, RuleBasicType = 10, RuleConstDecl = 11, 
-    RuleConstDef = 12, RuleVarDef = 13, RuleArrayDims = 14, RuleInitVal = 15, 
-    RuleStatement = 16, RuleForInit = 17, RuleForStep = 18, RuleForItem = 19, 
-    RuleExpr = 20, RuleLOrExp = 21, RuleLAndExp = 22, RuleEqExp = 23, RuleRelExp = 24, 
-    RuleAddExp = 25, RuleAddOp = 26, RuleMulExp = 27, RuleMulOp = 28, RuleUnaryExp = 29, 
+    RuleCompUnit = 0, RuleFuncDef = 1, RuleFuncType = 2, RuleFuncFParams = 3,
+    RuleFuncFParam = 4, RuleFuncArrayDims = 5, RuleBlock = 6, RuleBlockItemList = 7,
+    RuleBlockItem = 8, RuleVarDecl = 9, RuleBasicType = 10, RuleConstDecl = 11,
+    RuleConstDef = 12, RuleVarDef = 13, RuleArrayDims = 14, RuleInitVal = 15,
+    RuleStatement = 16, RuleForInit = 17, RuleForStep = 18, RuleForItem = 19,
+    RuleExpr = 20, RuleLOrExp = 21, RuleLAndExp = 22, RuleEqExp = 23, RuleRelExp = 24,
+    RuleAddExp = 25, RuleAddOp = 26, RuleMulExp = 27, RuleMulOp = 28, RuleUnaryExp = 29,
     RuleUnaryOp = 30, RulePrimaryExp = 31, RuleRealParamList = 32, RuleLVal = 33
   };
 
@@ -83,7 +84,7 @@ public:
   class UnaryOpContext;
   class PrimaryExpContext;
   class RealParamListContext;
-  class LValContext; 
+  class LValContext;
 
   class  CompUnitContext : public antlr4::ParserRuleContext {
   public:
@@ -99,7 +100,7 @@ public:
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   CompUnitContext* compUnit();
@@ -118,7 +119,7 @@ public:
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   FuncDefContext* funcDef();
@@ -133,7 +134,7 @@ public:
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   FuncTypeContext* funcType();
@@ -149,7 +150,7 @@ public:
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   FuncFParamsContext* funcFParams();
@@ -164,7 +165,7 @@ public:
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   FuncFParamContext* funcFParam();
@@ -182,7 +183,7 @@ public:
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   FuncArrayDimsContext* funcArrayDims();
@@ -197,7 +198,7 @@ public:
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   BlockContext* block();
@@ -211,7 +212,7 @@ public:
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   BlockItemListContext* blockItemList();
@@ -226,7 +227,7 @@ public:
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   BlockItemContext* blockItem();
@@ -245,7 +246,7 @@ public:
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   VarDeclContext* varDecl();
@@ -259,7 +260,7 @@ public:
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   BasicTypeContext* basicType();
@@ -279,7 +280,7 @@ public:
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   ConstDeclContext* constDecl();
@@ -295,7 +296,7 @@ public:
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   ConstDefContext* constDef();
@@ -311,7 +312,7 @@ public:
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   VarDefContext* varDef();
@@ -329,7 +330,7 @@ public:
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   ArrayDimsContext* arrayDims();
@@ -348,7 +349,7 @@ public:
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   InitValContext* initVal();
@@ -356,14 +357,14 @@ public:
   class  StatementContext : public antlr4::ParserRuleContext {
   public:
     StatementContext(antlr4::ParserRuleContext *parent, size_t invokingState);
-   
+
     StatementContext() = default;
     void copyFrom(StatementContext *context);
     using antlr4::ParserRuleContext::copyFrom;
 
     virtual size_t getRuleIndex() const override;
 
-   
+
   };
 
   class  WhileStatementContext : public StatementContext {
@@ -489,7 +490,7 @@ public:
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   ForInitContext* forInit();
@@ -505,7 +506,7 @@ public:
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   ForStepContext* forStep();
@@ -520,7 +521,7 @@ public:
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   ForItemContext* forItem();
@@ -533,7 +534,7 @@ public:
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   ExprContext* expr();
@@ -549,7 +550,7 @@ public:
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   LOrExpContext* lOrExp();
@@ -565,7 +566,7 @@ public:
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   LAndExpContext* lAndExp();
@@ -583,7 +584,7 @@ public:
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   EqExpContext* eqExp();
@@ -605,7 +606,7 @@ public:
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   RelExpContext* relExp();
@@ -621,7 +622,7 @@ public:
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   AddExpContext* addExp();
@@ -635,7 +636,7 @@ public:
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   AddOpContext* addOp();
@@ -651,7 +652,7 @@ public:
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   MulExpContext* mulExp();
@@ -666,7 +667,7 @@ public:
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   MulOpContext* mulOp();
@@ -688,7 +689,7 @@ public:
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   UnaryExpContext* unaryExp();
@@ -703,7 +704,7 @@ public:
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   UnaryOpContext* unaryOp();
@@ -717,13 +718,14 @@ public:
     antlr4::tree::TerminalNode *T_R_PAREN();
     antlr4::tree::TerminalNode *T_DIGIT();
     antlr4::tree::TerminalNode *T_FLOAT_LITERAL();
+    antlr4::tree::TerminalNode *T_STRING_LITERAL();
     LValContext *lVal();
     antlr4::tree::TerminalNode *T_INC();
     antlr4::tree::TerminalNode *T_DEC();
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   PrimaryExpContext* primaryExp();
@@ -739,7 +741,7 @@ public:
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   RealParamListContext* realParamList();
@@ -758,7 +760,7 @@ public:
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   LValContext* lVal();

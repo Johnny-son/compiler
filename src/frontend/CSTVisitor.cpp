@@ -47,6 +47,93 @@ ast_node * createNoScopeBlock(int64_t lineNo)
 	return createNoOpStatement(lineNo);
 }
 
+int hexDigitValue(char ch)
+{
+	if (ch >= '0' && ch <= '9') {
+		return ch - '0';
+	}
+	if (ch >= 'a' && ch <= 'f') {
+		return ch - 'a' + 10;
+	}
+	if (ch >= 'A' && ch <= 'F') {
+		return ch - 'A' + 10;
+	}
+	return -1;
+}
+
+std::string decodeStringLiteral(const std::string & tokenText)
+{
+	std::string decoded;
+	if (tokenText.size() < 2) {
+		return decoded;
+	}
+
+	for (std::size_t index = 1; index + 1 < tokenText.size(); ++index) {
+		char ch = tokenText[index];
+		if (ch != '\\' || index + 1 >= tokenText.size() - 1) {
+			decoded.push_back(ch);
+			continue;
+		}
+
+		char escaped = tokenText[++index];
+		switch (escaped) {
+			case 'n':
+				decoded.push_back('\n');
+				break;
+			case 't':
+				decoded.push_back('\t');
+				break;
+			case 'r':
+				decoded.push_back('\r');
+				break;
+			case 'b':
+				decoded.push_back('\b');
+				break;
+			case 'f':
+				decoded.push_back('\f');
+				break;
+			case '0':
+				decoded.push_back('\0');
+				break;
+			case '"':
+			case '\\':
+				decoded.push_back(escaped);
+				break;
+			case 'x': {
+				int value = 0;
+				while (index + 1 < tokenText.size() - 1) {
+					int digit = hexDigitValue(tokenText[index + 1]);
+					if (digit < 0) {
+						break;
+					}
+					value = (value << 4) + digit;
+					++index;
+				}
+				decoded.push_back(static_cast<char>(value & 0xff));
+				break;
+			}
+			default:
+				if (escaped >= '0' && escaped <= '7') {
+					int value = escaped - '0';
+					for (int count = 0; count < 2 && index + 1 < tokenText.size() - 1; ++count) {
+						char next = tokenText[index + 1];
+						if (next < '0' || next > '7') {
+							break;
+						}
+						value = value * 8 + (next - '0');
+						++index;
+					}
+					decoded.push_back(static_cast<char>(value & 0xff));
+				} else {
+					decoded.push_back(escaped);
+				}
+				break;
+		}
+	}
+
+	return decoded;
+}
+
 ast_node * createAssignNode(ast_node * lvalNode, ast_node * exprNode, int64_t lineNo)
 {
 	auto * node = ast_node::New(ast_operator_type::AST_OP_ASSIGN, lvalNode, exprNode);
@@ -753,7 +840,7 @@ std::any MiniCCSTVisitor::visitUnaryOp(MiniCParser::UnaryOpContext * ctx)
 
 std::any MiniCCSTVisitor::visitPrimaryExp(MiniCParser::PrimaryExpContext * ctx)
 {
-	// 识别文法产生式 primaryExp: T_L_PAREN expr T_R_PAREN | T_DIGIT | T_FLOAT_LITERAL | lVal (T_INC | T_DEC)?;
+	// 识别文法产生式 primaryExp: T_L_PAREN expr T_R_PAREN | T_DIGIT | T_FLOAT_LITERAL | T_STRING_LITERAL | lVal (T_INC | T_DEC)?;
 
 	ast_node * node = nullptr;
 
@@ -768,6 +855,9 @@ std::any MiniCCSTVisitor::visitPrimaryExp(MiniCParser::PrimaryExpContext * ctx)
 		double val = std::strtod(ctx->T_FLOAT_LITERAL()->getText().c_str(), nullptr);
 		int64_t lineNo = (int64_t) ctx->T_FLOAT_LITERAL()->getSymbol()->getLine();
 		node = ast_node::New(digit_real_attr{val, lineNo});
+	} else if (ctx->T_STRING_LITERAL()) {
+		int64_t lineNo = (int64_t) ctx->T_STRING_LITERAL()->getSymbol()->getLine();
+		node = ast_node::NewStringLiteral(decodeStringLiteral(ctx->T_STRING_LITERAL()->getText()), lineNo);
 	} else if (ctx->lVal()) {
 		// 具有左值的表达式
 		// 识别 primaryExp: lVal (T_INC | T_DEC)?

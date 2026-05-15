@@ -107,6 +107,12 @@ protected:
 	// float数字面量叶子节点翻译成线性中间IR
 	bool ir_leaf_node_float(ast_node * node);
 
+	// 字符串字面量目前只作为 putf 格式串使用
+	bool ir_leaf_node_string(ast_node * node);
+
+	// SysY 运行库 putf 的前端降级实现
+	bool ir_putf_call(ast_node * node);
+
 	// 变量声明语句节点翻译成线性中间IR
 	bool ir_declare_statment(ast_node * node);
 

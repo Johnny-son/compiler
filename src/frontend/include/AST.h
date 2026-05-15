@@ -23,6 +23,9 @@ enum class ast_operator_type : int {
 	// 浮点数字面量叶子节点
 	AST_OP_LEAF_LITERAL_FLOAT,
 
+	// 字符串字面量叶子节点
+	AST_OP_LEAF_LITERAL_STRING,
+
 	// 变量ID叶子节点
 	AST_OP_LEAF_VAR_ID,
 
@@ -170,6 +173,10 @@ public:
 	// attr 浮点数字面量
 	ast_node(digit_real_attr attr);
 
+	// 针对字符串字面量的构造函数
+	// text 已解码的字符串内容，不包含外层引号
+	ast_node(std::string text, int64_t _line_no, bool is_string_literal);
+
 	// 针对标识符ID的叶子构造函数
 	// attr 字符型标识符
 	ast_node(var_id_attr attr);
@@ -196,6 +203,11 @@ public:
 	// val 词法值
 	// line_no 行号
 	static ast_node * New(digit_real_attr attr);
+
+	// 创建字符串字面量的叶子节点
+	// text 已解码的字符串内容，不包含外层引号
+	// line_no 行号
+	static ast_node * NewStringLiteral(std::string text, int64_t lineno);
 
 	// 创建标识符的叶子节点
 	// val 词法值

@@ -117,8 +117,8 @@ unaryExp:
 // 一元运算符
 unaryOp: T_ADD | T_SUB | T_NOT;
 
-// 基本表达式：括号表达式、整数、浮点数、左值表达式
-primaryExp: T_L_PAREN expr T_R_PAREN | T_DIGIT | T_FLOAT_LITERAL | lVal (T_INC | T_DEC)?;
+// 基本表达式：括号表达式、整数、浮点数、字符串、左值表达式
+primaryExp: T_L_PAREN expr T_R_PAREN | T_DIGIT | T_FLOAT_LITERAL | T_STRING_LITERAL | lVal (T_INC | T_DEC)?;
 
 // 实参列表
 realParamList: expr (T_COMMA expr)*;
@@ -176,6 +176,9 @@ T_VOID: 'void';
 T_ID: [a-zA-Z_][a-zA-Z0-9_]*;
 fragment T_HEX_DIGIT: [0-9a-fA-F];
 fragment T_OCT_DIGIT: [0-7];
+fragment T_STRING_ESCAPE:
+	'\\' (["\\ntrbf0] | T_OCT_DIGIT T_OCT_DIGIT? T_OCT_DIGIT? | 'x' T_HEX_DIGIT+);
+T_STRING_LITERAL: '"' (T_STRING_ESCAPE | ~["\\\r\n])* '"';
 T_FLOAT_LITERAL:
 	([0-9]+ '.' [0-9]* | '.' [0-9]+) ([eE] [+-]? [0-9]+)?
 	| [0-9]+ [eE] [+-]? [0-9]+
