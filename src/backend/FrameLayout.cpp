@@ -79,7 +79,8 @@ void appendValueSlot(FunctionFrameLayout & layout, const IRValueView & value, in
 	}
 
 	const int32_t size = slotSizeForValue(value);
-	cursor += size;
+	const int32_t align = FunctionFrameLayout::stackSlotSize;
+	cursor = alignTo(cursor + size, align);
 
 	StackSlotInfo slot;
 	slot.kind = kindForValue(value);
@@ -87,7 +88,7 @@ void appendValueSlot(FunctionFrameLayout & layout, const IRValueView & value, in
 	slot.name = debugNameForValue(value);
 	slot.offset = -cursor;
 	slot.size = size;
-	slot.align = FunctionFrameLayout::stackSlotSize;
+	slot.align = align;
 	layout.addSlot(slot);
 }
 
@@ -197,14 +198,14 @@ void appendReusableInstructionResultSlots(FunctionFrameLayout & layout, IRFuncti
 		slot.align = FunctionFrameLayout::stackSlotSize;
 
 		if (escapingValues.find(value.raw()) != escapingValues.end()) {
-			cursor += size;
+			cursor = alignTo(cursor + size, slot.align);
 			slot.offset = -cursor;
 		} else if (reusableIndex >= 0) {
 			auto & reused = reusableSlots[static_cast<std::size_t>(reusableIndex)];
 			reused.end = end;
 			slot.offset = reused.offset;
 		} else {
-			cursor += size;
+			cursor = alignTo(cursor + size, slot.align);
 			slot.offset = -cursor;
 			reusableSlots.push_back(ReusableSlot{slot.offset, size, end});
 		}
@@ -361,7 +362,7 @@ FunctionFrameLayout FrameLayoutBuilder::build(IRFunctionView function)
 		outgoingAreaSize = (maxCallArgCount - FunctionFrameLayout::argRegCount) * FunctionFrameLayout::stackSlotSize;
 		outgoingAreaSize = alignTo(outgoingAreaSize, FunctionFrameLayout::stackSlotSize);
 
-		cursor += outgoingAreaSize;
+		cursor = alignTo(cursor + outgoingAreaSize, FunctionFrameLayout::stackSlotSize);
 		layout.addSlot(StackSlotInfo{
 			StackObjectKind::OutgoingArgArea,
 			nullptr,
