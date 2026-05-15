@@ -3,6 +3,7 @@
 #include "Module.h"
 
 #include <cstdarg>
+#include <cctype>
 #include <cstdio>
 #include <fstream>
 #include <iomanip>
@@ -19,6 +20,21 @@
 #include "Status.h"
 
 namespace {
+
+std::string sanitize_symbol_part(std::string name)
+{
+	for (char & ch: name) {
+		if (!std::isalnum(static_cast<unsigned char>(ch)) && ch != '_') {
+			ch = '_';
+		}
+	}
+	return name;
+}
+
+std::string mangled_global_variable_ir_name_base(const std::string & source_name)
+{
+	return "@__minic_global_" + sanitize_symbol_part(source_name);
+}
 
 // 统一格式化Module阶段的错误详情
 std::string format_detail(const char * format, va_list args)
@@ -146,11 +162,6 @@ Function * Module::newFunction(std::string name, Type * returnType, std::vector<
 		return nullptr;
 	}
 
-	// 全局变量与函数共用顶层命名空间，名称冲突时直接拒绝
-	if (findGlobalVariable(name) != nullptr) {
-		return nullptr;
-	}
-
 	// 根据形参创建形参类型清单
 	std::vector<Type *> paramsType;
 	paramsType.reserve(params.size());
@@ -175,6 +186,7 @@ Function * Module::newFunction(std::string name, Type * returnType, std::vector<
 	}
 
 	insertFunctionDirectly(tempFunc);
+	ensureUniqueGlobalIRNames();
 
 	return tempFunc;
 }
@@ -211,6 +223,51 @@ void Module::insertGlobalValueDirectly(GlobalVariable * val)
 {
 	globalVariableMap.emplace(val->getName(), val);
 	globalVariableVector.push_back(val);
+}
+
+bool Module::isTopLevelIRNameUsed(const std::string & irName, const GlobalVariable * ignoredGlobal) const
+{
+	if (irName.empty()) {
+		return false;
+	}
+
+	for (auto * func: funcVector) {
+		if (func != nullptr && func->getIRName() == irName) {
+			return true;
+		}
+	}
+
+	for (auto * global: globalVariableVector) {
+		if (global != nullptr && global != ignoredGlobal && global->getIRName() == irName) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+std::string Module::allocateMangledGlobalIRName(const std::string & sourceName, const GlobalVariable * target) const
+{
+	const std::string base = mangled_global_variable_ir_name_base(sourceName);
+	std::string candidate = base;
+	for (int suffix = 1; isTopLevelIRNameUsed(candidate, target); ++suffix) {
+		candidate = base + "." + std::to_string(suffix);
+	}
+	return candidate;
+}
+
+void Module::ensureUniqueGlobalIRName(GlobalVariable * val)
+{
+	if (val != nullptr && isTopLevelIRNameUsed(val->getIRName(), val)) {
+		val->setIRName(allocateMangledGlobalIRName(val->getName(), val));
+	}
+}
+
+void Module::ensureUniqueGlobalIRNames()
+{
+	for (auto * global: globalVariableVector) {
+		ensureUniqueGlobalIRName(global);
+	}
 }
 
 /// @brief Value直接插入到符号表中的全局变量中
@@ -311,12 +368,6 @@ Value * Module::newVarValue(Type * type, const std::string & name, int64_t linen
 			report_module_error("E1400", lineno, "符号检查", "变量(%s)已经存在", name.c_str());
 			return nullptr;
 		}
-
-		// 全局变量名也不能和函数名冲突，避免顶层符号表出现二义性
-		if (!currentFunc && findFunction(name) != nullptr) {
-			report_module_error("E1400", lineno, "符号检查", "变量(%s)已经存在", name.c_str());
-			return nullptr;
-		}
 	} else if (!currentFunc) {
 		// 全局变量要求name不能为空串，必须有效
 		report_module_error("E1401", lineno, "符号检查", "全局变量名为空");
@@ -379,8 +430,10 @@ GlobalVariable * Module::newGlobalVariable(Type * type, std::string name, Global
 {
 	GlobalVariable * val = new GlobalVariable(type, name);
 	val->setLinkage(linkage);
+	ensureUniqueGlobalIRName(val);
 
 	insertGlobalValueDirectly(val);
+	ensureUniqueGlobalIRName(val);
 
 	return val;
 }

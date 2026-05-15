@@ -145,6 +145,14 @@ protected:
 	// Value插入到符号表中
 	void insertGlobalValueDirectly(GlobalVariable * val);
 
+	bool isTopLevelIRNameUsed(const std::string & irName, const GlobalVariable * ignoredGlobal = nullptr) const;
+
+	std::string allocateMangledGlobalIRName(const std::string & sourceName, const GlobalVariable * target) const;
+
+	void ensureUniqueGlobalIRName(GlobalVariable * val);
+
+	void ensureUniqueGlobalIRNames();
+
 	// ConstInt插入到符号表中
 	void insertConstIntDirectly(ConstInt * val);
 

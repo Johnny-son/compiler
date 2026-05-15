@@ -52,7 +52,7 @@ BackendDriver::run
 常见坑位：
 
 - `.bss`/`.data` 分段顺序与重复输出标记（`emittedBss/emittedData`）要保持一致，否则汇编段会乱。
-- `global.name()` 与 `IRName` 不同语义，误用会导致符号名不对。
+- `global.name()` 与 `IRName` 不同语义，发射 `.globl`、标签和 `la` 引用时必须使用 `IRName` 派生的汇编符号；源码级同名函数/全局变量以及二次改名碰撞会依赖这层唯一符号避免冲突。
 - 忘记跳过 builtin 函数会生成非法汇编函数体。
 
 ## 3. `src/backend/include/IRAdapter.h`
@@ -253,4 +253,3 @@ AsmOperand::reg/imm/mem/label/symbol
 
 - `printFunction` 每次会输出 `.text/.globl/.type/.size`，若你改成按 TU 聚合输出，注意去重。
 - `toString` 与 `printFunction` 必须保持语义一致，否则调试文本和落盘结果会分叉。
-

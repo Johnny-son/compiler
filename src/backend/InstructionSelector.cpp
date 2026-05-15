@@ -77,6 +77,12 @@ std::string sanitizeLabelPart(std::string name)
 	return name;
 }
 
+std::string asmSymbolFromIRName(const std::string & irName, const std::string & fallback)
+{
+	const std::string & symbol = irName.empty() ? fallback : irName;
+	return !symbol.empty() && symbol.front() == '@' ? symbol.substr(1) : symbol;
+}
+
 } // namespace
 
 InstructionSelector::InstructionSelector(IRFunctionView function, const FunctionFrameLayout & layout)
@@ -731,7 +737,9 @@ void InstructionSelector::storeToPointer(const MachineOperand & src, const IRVal
 
 void InstructionSelector::loadAddressOfGlobal(const IRValueView & value, const MachineOperand & dst)
 {
-	machineFunction.emit(MachineOpcode::LA, {dst.asDef(), MachineOperand::globalSymbol(value.name())});
+	machineFunction.emit(
+		MachineOpcode::LA,
+		{dst.asDef(), MachineOperand::globalSymbol(asmSymbolFromIRName(value.irName(), value.name()))});
 }
 
 bool InstructionSelector::hasPhiCopiesForEdge(BasicBlock * successor, BasicBlock * predecessor) const

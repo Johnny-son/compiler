@@ -259,7 +259,7 @@ int add(int a, int b) {
 |---|---|---|
 | `Function *` | 返回值 | 新建函数；失败返回 `nullptr` |
 
-**实现逻辑**：检查函数重名和全局变量冲突；根据形参生成 `FunctionType`；创建 `Function`；给形参分配 IRName；插入函数映射表和函数列表。
+**实现逻辑**：检查函数重名；根据形参生成 `FunctionType`；创建 `Function`；给形参分配 IRName；插入函数映射表和函数列表。如果已有全局变量的 IR 名称与函数冲突，源码级名称仍保留在变量表中，但会给该全局变量设置唯一 `IRName`，避免 LLVM IR 和 ASM 顶层符号冲突。
 
 ---
 
@@ -355,7 +355,7 @@ int add(int a, int b) {
 |---|---|---|
 | `Value *` | 返回值 | 变量值；失败为 `nullptr` |
 
-**实现逻辑**：如果当前函数为空，创建全局变量；否则创建或绑定局部变量。当前新版函数体内更常见的做法是：`IRGenerator` 用 `createEntryAlloca()` 创建入口块 alloca，再用 `bindValue()` 绑定变量名。
+**实现逻辑**：如果当前函数为空，创建全局变量；否则创建或绑定局部变量。全局变量允许与函数共享源码级名称；顶层冲突时通过唯一 `IRName` 改名区分实际链接符号。当前新版函数体内更常见的做法是：`IRGenerator` 用 `createEntryAlloca()` 创建入口块 alloca，再用 `bindValue()` 绑定变量名。
 
 ---
 

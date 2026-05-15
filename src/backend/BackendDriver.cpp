@@ -25,6 +25,12 @@ bool isIdentifierChar(char ch)
 	return std::isalnum(static_cast<unsigned char>(ch)) || ch == '_';
 }
 
+std::string asmSymbolFromIRName(const std::string & irName, const std::string & fallback)
+{
+	const std::string & symbol = irName.empty() ? fallback : irName;
+	return !symbol.empty() && symbol.front() == '@' ? symbol.substr(1) : symbol;
+}
+
 bool isNumericToken(const std::string & token)
 {
 	if (token.empty()) {
@@ -199,11 +205,12 @@ bool BackendDriver::run(Module * module, const std::string & outputFile) const
 				currentSection = DataSection::Bss;
 			}
 
+			const std::string symbolName = asmSymbolFromIRName(global.irName(), global.name());
 			if (globalVar->getLinkage() != GlobalValue::InternalLinkage) {
-				fprintf(fp, ".globl %s\n", global.name().c_str());
+				fprintf(fp, ".globl %s\n", symbolName.c_str());
 			}
 			fprintf(fp, ".balign %d\n", globalVar->getAlignment());
-			fprintf(fp, "%s:\n", global.name().c_str());
+			fprintf(fp, "%s:\n", symbolName.c_str());
 			fprintf(fp, ".zero %d\n", globalVar->getType()->getSize());
 			continue;
 		}
@@ -214,11 +221,12 @@ bool BackendDriver::run(Module * module, const std::string & outputFile) const
 			currentSection = DataSection::Data;
 		}
 
+		const std::string symbolName = asmSymbolFromIRName(global.irName(), global.name());
 		if (globalVar->getLinkage() != GlobalValue::InternalLinkage) {
-			fprintf(fp, ".globl %s\n", global.name().c_str());
+			fprintf(fp, ".globl %s\n", symbolName.c_str());
 		}
 		fprintf(fp, ".balign %d\n", globalVar->getAlignment());
-		fprintf(fp, "%s:\n", global.name().c_str());
+		fprintf(fp, "%s:\n", symbolName.c_str());
 		if (globalVar->hasInitializerText()) {
 			emitWords(fp, initializerWords(globalVar->getType(), globalVar->getInitializerText()));
 		} else {
