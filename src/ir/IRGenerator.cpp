@@ -1825,21 +1825,24 @@ bool IRGenerator::ir_variable_declare(ast_node * node)
 	}
 
 	AllocaInst * alloca = createEntryAlloca(module->getCurrentFunction(), declaredType, node->sons[1]->name);
-	if (alloca == nullptr || !module->bindValue(node->sons[1]->name, alloca, node->sons[1]->line_no)) {
+	if (alloca == nullptr) {
 		return false;
 	}
 	node->val = alloca;
 	node->val->setConstValue(node->isConst);
 
 	if (dimsNode != nullptr) {
+		bool initOk = false;
 		if (initExpr == nullptr) {
-			return emitZeroInitializer(node->val, declaredType);
+			initOk = emitZeroInitializer(node->val, declaredType);
+		} else {
+			initOk = emitArrayInitializerStores(node->val, declaredType, initExpr);
 		}
-		return emitArrayInitializerStores(node->val, declaredType, initExpr);
+		return initOk && module->bindValue(node->sons[1]->name, alloca, node->sons[1]->line_no);
 	}
 
 	if (initExpr == nullptr) {
-		return true;
+		return module->bindValue(node->sons[1]->name, alloca, node->sons[1]->line_no);
 	}
 
 	ast_node * init_node = ir_visit_ast_node(initExpr);
@@ -1865,7 +1868,7 @@ bool IRGenerator::ir_variable_declare(ast_node * node)
 		}
 	}
 
-	return true;
+	return module->bindValue(node->sons[1]->name, alloca, node->sons[1]->line_no);
 }
 
 // 常量声明节点翻译成MiniLLVM IR

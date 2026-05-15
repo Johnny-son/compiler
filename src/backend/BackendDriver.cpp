@@ -20,24 +20,9 @@
 
 namespace {
 
-std::vector<std::string> tokenizeInitializer(const std::string & text)
+bool isIdentifierChar(char ch)
 {
-	std::vector<std::string> tokens;
-	std::string token;
-	for (char ch: text) {
-		if (std::isspace(static_cast<unsigned char>(ch)) || ch == '[' || ch == ']' || ch == ',') {
-			if (!token.empty()) {
-				tokens.push_back(token);
-				token.clear();
-			}
-			continue;
-		}
-		token.push_back(ch);
-	}
-	if (!token.empty()) {
-		tokens.push_back(token);
-	}
-	return tokens;
+	return std::isalnum(static_cast<unsigned char>(ch)) || ch == '_';
 }
 
 bool isNumericToken(const std::string & token)
@@ -76,6 +61,80 @@ uint32_t parseIntWord(const std::string & token)
 	return static_cast<uint32_t>(std::strtol(token.c_str(), nullptr, 0));
 }
 
+bool matchWord(const std::string & text, std::size_t pos, const char * word)
+{
+	const std::size_t len = std::strlen(word);
+	if (pos + len > text.size() || text.compare(pos, len, word) != 0) {
+		return false;
+	}
+
+	if (pos > 0 && isIdentifierChar(text[pos - 1])) {
+		return false;
+	}
+	if (pos + len < text.size() && isIdentifierChar(text[pos + len])) {
+		return false;
+	}
+	return true;
+}
+
+char previousNonSpace(const std::string & text, std::size_t pos)
+{
+	while (pos > 0) {
+		--pos;
+		if (!std::isspace(static_cast<unsigned char>(text[pos]))) {
+			return text[pos];
+		}
+	}
+	return '\0';
+}
+
+std::string readInitializerValueToken(const std::string & text, std::size_t pos)
+{
+	while (pos < text.size() && std::isspace(static_cast<unsigned char>(text[pos]))) {
+		++pos;
+	}
+
+	std::size_t end = pos;
+	while (end < text.size() && !std::isspace(static_cast<unsigned char>(text[end])) && text[end] != ',' &&
+		   text[end] != '[' && text[end] != ']') {
+		++end;
+	}
+
+	return text.substr(pos, end - pos);
+}
+
+std::vector<uint32_t> scalarInitializerWords(Type * type, const std::string & text, std::size_t wordCount)
+{
+	std::vector<uint32_t> words(wordCount, 0);
+	std::size_t out = 0;
+
+	for (std::size_t pos = 0; pos < text.size() && out < words.size(); ++pos) {
+		const bool intWord = matchWord(text, pos, "i32");
+		const bool floatWord = matchWord(text, pos, "float");
+		if (!intWord && !floatWord) {
+			continue;
+		}
+
+		if (previousNonSpace(text, pos) == 'x') {
+			continue;
+		}
+
+		const std::size_t typeLen = intWord ? std::strlen("i32") : std::strlen("float");
+		std::string token = readInitializerValueToken(text, pos + typeLen);
+		if (!isNumericToken(token)) {
+			continue;
+		}
+
+		if (floatWord || (type != nullptr && type->isFloatType())) {
+			words[out++] = parseFloatWord(token);
+		} else {
+			words[out++] = parseIntWord(token);
+		}
+	}
+
+	return words;
+}
+
 std::vector<uint32_t> initializerWords(Type * type, const std::string & text)
 {
 	const std::size_t wordCount = type != nullptr && type->getSize() > 0 ? static_cast<std::size_t>(type->getSize() / 4) : 1;
@@ -94,19 +153,7 @@ std::vector<uint32_t> initializerWords(Type * type, const std::string & text)
 		return words;
 	}
 
-	const auto tokens = tokenizeInitializer(text);
-	std::size_t out = 0;
-	for (std::size_t index = 0; index + 1 < tokens.size() && out < words.size(); ++index) {
-		if (tokens[index] == "i32" && isNumericToken(tokens[index + 1])) {
-			words[out++] = parseIntWord(tokens[++index]);
-			continue;
-		}
-		if (tokens[index] == "float" && isNumericToken(tokens[index + 1])) {
-			words[out++] = parseFloatWord(tokens[++index]);
-			continue;
-		}
-	}
-	return words;
+	return scalarInitializerWords(type, text, wordCount);
 }
 
 void emitWords(FILE * fp, const std::vector<uint32_t> & words)
