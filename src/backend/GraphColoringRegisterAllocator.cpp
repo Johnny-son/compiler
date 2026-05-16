@@ -154,25 +154,6 @@ InterferenceGraph buildInterferenceGraph(const MachineFunction & function, const
 	return graph;
 }
 
-std::vector<int32_t> nodesByDegree(const InterferenceGraph & graph)
-{
-	std::vector<int32_t> nodes;
-	nodes.reserve(graph.neighbors.size());
-	for (const auto & entry: graph.neighbors) {
-		nodes.push_back(entry.first);
-	}
-
-	std::sort(nodes.begin(), nodes.end(), [&graph](int32_t lhs, int32_t rhs) {
-		const int lhsDegree = graph.degree(lhs);
-		const int rhsDegree = graph.degree(rhs);
-		if (lhsDegree != rhsDegree) {
-			return lhsDegree > rhsDegree;
-		}
-		return lhs < rhs;
-	});
-	return nodes;
-}
-
 int32_t highestDegreeNode(const std::set<int32_t> & nodes, const InterferenceGraph & graph)
 {
 	int32_t best = -1;
@@ -187,11 +168,82 @@ int32_t highestDegreeNode(const std::set<int32_t> & nodes, const InterferenceGra
 	return best;
 }
 
+int colorCountFor(int32_t vreg, const InterferenceGraph & graph)
+{
+	auto classIter = graph.classes.find(vreg);
+	const RegisterClass regClass = classIter != graph.classes.end() ? classIter->second : RegisterClass::GPR;
+	return static_cast<int>(allocatableRegsFor(regClass).size());
+}
+
+int32_t highestCurrentDegreeNode(const std::set<int32_t> & nodes, const std::map<int32_t, int> & degrees)
+{
+	int32_t best = -1;
+	int bestDegree = -1;
+	for (int32_t node: nodes) {
+		auto iter = degrees.find(node);
+		const int degree = iter == degrees.end() ? 0 : iter->second;
+		if (degree > bestDegree || (degree == bestDegree && (best < 0 || node < best))) {
+			best = node;
+			bestDegree = degree;
+		}
+	}
+	return best;
+}
+
 ColoringResult colorGraph(const InterferenceGraph & graph)
 {
 	ColoringResult result;
+	std::set<int32_t> remaining;
+	std::map<int32_t, int> degrees;
+	std::set<std::pair<int, int32_t>> lowDegreeNodes;
+	std::vector<int32_t> selectStack;
 
-	for (int32_t node: nodesByDegree(graph)) {
+	for (const auto & entry: graph.neighbors) {
+		const int32_t node = entry.first;
+		const int degree = static_cast<int>(entry.second.size());
+		remaining.insert(node);
+		degrees[node] = degree;
+		if (degree < colorCountFor(node, graph)) {
+			lowDegreeNodes.emplace(degree, node);
+		}
+	}
+	selectStack.reserve(remaining.size());
+
+	while (!remaining.empty()) {
+		int32_t selected = -1;
+
+		if (!lowDegreeNodes.empty()) {
+			selected = lowDegreeNodes.begin()->second;
+			lowDegreeNodes.erase(lowDegreeNodes.begin());
+		} else {
+			selected = highestCurrentDegreeNode(remaining, degrees);
+		}
+
+		selectStack.push_back(selected);
+		remaining.erase(selected);
+		auto neighborIter = graph.neighbors.find(selected);
+		if (neighborIter == graph.neighbors.end()) {
+			continue;
+		}
+
+		for (int32_t neighbor: neighborIter->second) {
+			if (remaining.find(neighbor) == remaining.end()) {
+				continue;
+			}
+			const int oldDegree = degrees[neighbor];
+			lowDegreeNodes.erase(std::make_pair(oldDegree, neighbor));
+			const int newDegree = oldDegree - 1;
+			degrees[neighbor] = newDegree;
+			if (newDegree < colorCountFor(neighbor, graph)) {
+				lowDegreeNodes.emplace(newDegree, neighbor);
+			}
+		}
+	}
+
+	while (!selectStack.empty()) {
+		const int32_t node = selectStack.back();
+		selectStack.pop_back();
+
 		std::set<PhysicalReg> used;
 		auto neighborIter = graph.neighbors.find(node);
 		if (neighborIter != graph.neighbors.end()) {
@@ -310,6 +362,13 @@ void rewriteSpill(MachineFunction & function, FunctionFrameLayout & layout, int3
 	}
 }
 
+void rewriteSpills(MachineFunction & function, FunctionFrameLayout & layout, const std::vector<int32_t> & spilledVRegs)
+{
+	for (int32_t spilledVReg: spilledVRegs) {
+		rewriteSpill(function, layout, spilledVReg);
+	}
+}
+
 void rewriteFrameSetup(MachineFunction & function, const FunctionFrameLayout & layout)
 {
 	if (function.blocks().empty()) {
@@ -421,7 +480,20 @@ bool GraphColoringRegisterAllocator::run(MachineFunction & function, FunctionFra
 			if (frameFinalized) {
 				return false;
 			}
-			rewriteSpill(function, layout, highestDegreeNode(graph.mustSpill, graph));
+			std::vector<int32_t> spillCandidates;
+			spillCandidates.reserve(graph.mustSpill.size());
+			for (int32_t vreg: graph.mustSpill) {
+				spillCandidates.push_back(vreg);
+			}
+			std::sort(spillCandidates.begin(), spillCandidates.end(), [&graph](int32_t lhs, int32_t rhs) {
+				const int lhsDegree = graph.degree(lhs);
+				const int rhsDegree = graph.degree(rhs);
+				if (lhsDegree != rhsDegree) {
+					return lhsDegree > rhsDegree;
+				}
+				return lhs < rhs;
+			});
+			rewriteSpills(function, layout, spillCandidates);
 			frameFinalized = false;
 			continue;
 		}
