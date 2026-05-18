@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-TEST_ROOT="${REPO_ROOT}/test/contesttestcases"
+TEST_ROOT="${TEST_ROOT:-${REPO_ROOT}/test/contesttestcases}"
 RUNTIME_LIB="${TEST_ROOT}/lib/std.c"
 DEFAULT_TEST_PLAN_FILE="${SCRIPT_DIR}/ci_test_plan.txt"
 
@@ -23,6 +23,8 @@ TIMEOUT_BIN="${TIMEOUT_BIN:-}"
 CASE_COMPILE_TIMEOUT="${CASE_COMPILE_TIMEOUT:-120s}"
 CASE_LINK_TIMEOUT="${CASE_LINK_TIMEOUT:-120s}"
 CASE_RUN_TIMEOUT="${CASE_RUN_TIMEOUT:-20s}"
+PERF_REPORT_FILE="${PERF_REPORT_FILE:-}"
+PERF_REPEAT="${PERF_REPEAT:-1}"
 
 declare -a TARGET_SPECS=()
 declare -a CASES=()
@@ -41,6 +43,9 @@ SUITE_OK_COUNT=0
 SUITE_NG_COUNT=0
 TOTAL_OK_COUNT=0
 TOTAL_NG_COUNT=0
+PERF_TOTAL_TIMER_MS=0
+PERF_TOTAL_WALL_MS=0
+PERF_MEASURED_COUNT=0
 
 declare -a ALL_FAILED_CASES=()
 declare -a ALL_FAILED_REASONS=()
@@ -67,7 +72,7 @@ Options:
   -ir                 Test LLVM IR generation, local link, run and diff
   -asm                Test RISCV64 assembly generation and execution
   -err                Test diagnostic (error) output matching
-  -perf               Test performance cases through LLVM IR path
+  -perf               Test RISCV64 backend performance cases and emit timing data
   --all               Run tests listed in the test plan file
   --with-perf         Include perf section when running --all locally
   --test-plan <path>  Override the default test plan file
@@ -79,6 +84,9 @@ Environment:
   CASE_COMPILE_TIMEOUT  Per-case compiler timeout, default 120s
   CASE_LINK_TIMEOUT     Per-case link timeout, default 120s
   CASE_RUN_TIMEOUT      Per-case executable timeout, default 20s
+  TEST_ROOT             Test root, default test/contesttestcases
+  PERF_REPORT_FILE      Write per-case perf CSV to this path
+  PERF_REPEAT           Repeat each perf executable N times, default 1
 
 Examples:
   scripts/run_ci_tests.sh -ir 2023_function
@@ -198,6 +206,89 @@ run_logged_timed_command() {
   else
     run_logged_command "$@"
   fi
+}
+
+now_ns() {
+  local value
+  value="$(date +%s%N 2>/dev/null || true)"
+  if [[ "${value}" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "${value}"
+    return
+  fi
+
+  python3 - <<'PY'
+import time
+print(time.time_ns())
+PY
+}
+
+timer_line_to_ms() {
+  local line="$1"
+  if [[ "${line}" =~ ([0-9]+)H-([0-9]+)M-([0-9]+)S-([0-9]+)us ]]; then
+    local hours="${BASH_REMATCH[1]}"
+    local minutes="${BASH_REMATCH[2]}"
+    local seconds="${BASH_REMATCH[3]}"
+    local micros="${BASH_REMATCH[4]}"
+    printf '%d\n' $(( ((hours * 3600 + minutes * 60 + seconds) * 1000000 + micros + 999) / 1000 ))
+    return 0
+  fi
+  return 1
+}
+
+parse_perf_timer_ms() {
+  local timer_file="$1"
+  local line=""
+  local total_ms=0
+  local parsed_ms=0
+
+  if [[ ! -s "${timer_file}" ]]; then
+    return 1
+  fi
+
+  line="$(grep -a 'TOTAL:' "${timer_file}" | tail -n 1 || true)"
+  if [[ -n "${line}" ]] && parsed_ms="$(timer_line_to_ms "${line}")"; then
+    printf '%s\n' "${parsed_ms}"
+    return 0
+  fi
+
+  while IFS= read -r line; do
+    if [[ "${line}" == Timer@* ]] && parsed_ms="$(timer_line_to_ms "${line}")"; then
+      total_ms=$((total_ms + parsed_ms))
+    fi
+  done < "${timer_file}"
+
+  if [[ ${total_ms} -gt 0 ]]; then
+    printf '%s\n' "${total_ms}"
+    return 0
+  fi
+
+  return 1
+}
+
+init_perf_report() {
+  if [[ -n "${PERF_REPORT_FILE}" ]]; then
+    mkdir -p "$(dirname "${PERF_REPORT_FILE}")"
+    printf 'case,status,timer_ms,wall_ms,compile_ms,link_ms,run_count,note\n' > "${PERF_REPORT_FILE}"
+  fi
+}
+
+append_perf_report() {
+  local case_name="$1"
+  local status="$2"
+  local timer_ms="$3"
+  local wall_ms="$4"
+  local compile_ms="$5"
+  local link_ms="$6"
+  local run_count="$7"
+  local note="$8"
+
+  if [[ -z "${PERF_REPORT_FILE}" ]]; then
+    return
+  fi
+
+  printf '%s,%s,%s,%s,%s,%s,%s,%s\n' \
+    "${case_name}" "${status}" "${timer_ms}" "${wall_ms}" "${compile_ms}" "${link_ms}" "${run_count}" "${note}" \
+    >> "${PERF_REPORT_FILE}"
 }
 
 resolve_compiler_for_mode() {
@@ -950,9 +1041,23 @@ run_mode_suite() {
   local artifact_file=""
   local bin_file=""
   local result_file=""
+  local timer_file=""
   local exit_code=0
+  local compile_start_ns=0
+  local compile_end_ns=0
+  local compile_ms=0
+  local link_start_ns=0
+  local link_end_ns=0
+  local link_ms=0
+  local run_start_ns=0
+  local run_end_ns=0
+  local wall_ms=0
+  local timer_ms=0
+  local repeat_index=0
+  local parsed_timer_ms=0
 
   local -a compiler_cmd=()
+  local -a llvm_link_cmd=()
   local -a run_cmd=()
 
   CASES=()
@@ -969,9 +1074,16 @@ run_mode_suite() {
   compiler_path="$(resolve_compiler_for_mode "${suite_mode}")"
 
   case "${suite_mode}" in
-    asm) setup_asm_tools ;;
-    ir|perf) setup_ir_tools ;;
+    asm|perf) setup_asm_tools ;;
+    ir) setup_ir_tools ;;
   esac
+
+  if [[ "${suite_mode}" == "perf" ]]; then
+    init_perf_report
+    PERF_TOTAL_TIMER_MS=0
+    PERF_TOTAL_WALL_MS=0
+    PERF_MEASURED_COUNT=0
+  fi
 
   for case_file in "$@"; do
     if [[ "${case_file}" == \!* ]]; then
@@ -997,7 +1109,8 @@ run_mode_suite() {
 
     case "${suite_mode}" in
       asm) artifact_file="${workdir}/${case_name}.s" ;;
-      ir|perf) artifact_file="${workdir}/${case_name}.ll" ;;
+      perf) artifact_file="${workdir}/${case_name}.s" ;;
+      ir) artifact_file="${workdir}/${case_name}.ll" ;;
       ast) artifact_file="${workdir}/${case_name}.png" ;;
     esac
 
@@ -1007,10 +1120,10 @@ run_mode_suite() {
 
     compiler_cmd=("${compiler_path}" -S)
     case "${suite_mode}" in
-      asm)
+      asm|perf)
         compiler_cmd+=(-t "${MINIC_TARGET}")
         ;;
-      ir|perf)
+      ir)
         compiler_cmd+=(-L)
         ;;
       ast)
@@ -1025,18 +1138,23 @@ run_mode_suite() {
     compiler_cmd+=(-o "${artifact_file}" "${case_file}")
 
     set +e
+    compile_start_ns="$(now_ns)"
     run_logged_timed_command "${CASE_COMPILE_TIMEOUT}" "${compiler_cmd[@]}"
     exit_code=$?
+    compile_end_ns="$(now_ns)"
     set -e
+    compile_ms=$(( (compile_end_ns - compile_start_ns) / 1000000 ))
 
     if is_timeout_exit "${exit_code}"; then
       print_case_failure "${case_name}" "compile timed out"
       record_failure "${case_name}" "compile timed out"
+      append_perf_report "${case_name}" "compile_timeout" "" "" "${compile_ms}" "" 0 "compile timed out"
       SUITE_NG_COUNT=$((SUITE_NG_COUNT + 1))
       continue
     elif [[ ${exit_code} -ne 0 ]]; then
       print_case_failure "${case_name}" "compile failed"
       record_failure "${case_name}" "compile failed"
+      append_perf_report "${case_name}" "compile_failed" "" "" "${compile_ms}" "" 0 "compile failed"
       SUITE_NG_COUNT=$((SUITE_NG_COUNT + 1))
       continue
     fi
@@ -1044,6 +1162,7 @@ run_mode_suite() {
     if [[ ! -f "${artifact_file}" ]]; then
       print_case_failure "${case_name}" "artifact not generated"
       record_failure "${case_name}" "artifact not generated"
+      append_perf_report "${case_name}" "artifact_missing" "" "" "${compile_ms}" "" 0 "artifact not generated"
       SUITE_NG_COUNT=$((SUITE_NG_COUNT + 1))
       continue
     fi
@@ -1056,33 +1175,37 @@ run_mode_suite() {
     if [[ ! -f "${output_file}" ]]; then
       print_case_failure "${case_name}" "missing expected output"
       record_failure "${case_name}" "missing expected output"
+      append_perf_report "${case_name}" "missing_expected_output" "" "" "${compile_ms}" "" 0 "missing expected output"
       SUITE_NG_COUNT=$((SUITE_NG_COUNT + 1))
       continue
     fi
 
     bin_file="${workdir}/${case_name}"
     result_file="${workdir}/${case_name}.result"
+    timer_file="${workdir}/${case_name}.timer"
 
-    if [[ "${suite_mode}" == "ir" || "${suite_mode}" == "perf" ]]; then
+    if [[ "${suite_mode}" == "ir" ]]; then
       llvm_link_cmd=("${LLVM_CC}" -o "${bin_file}")
-      if [[ "${suite_mode}" == "perf" ]]; then
-        llvm_link_cmd+=(-DOPT_TEST)
-      fi
       llvm_link_cmd+=("${artifact_file}" "${RUNTIME_LIB}")
 
       set +e
+      link_start_ns="$(now_ns)"
       run_logged_timed_command "${CASE_LINK_TIMEOUT}" "${llvm_link_cmd[@]}"
       exit_code=$?
+      link_end_ns="$(now_ns)"
       set -e
+      link_ms=$(( (link_end_ns - link_start_ns) / 1000000 ))
 
       if is_timeout_exit "${exit_code}"; then
         print_case_failure "${case_name}" "link timed out"
         record_failure "${case_name}" "LLVM IR link timed out"
+        append_perf_report "${case_name}" "link_timeout" "" "" "${compile_ms}" "${link_ms}" 0 "LLVM IR link timed out"
         SUITE_NG_COUNT=$((SUITE_NG_COUNT + 1))
         continue
       elif [[ ${exit_code} -ne 0 ]]; then
         print_case_failure "${case_name}" "link failed"
         record_failure "${case_name}" "LLVM IR link failed"
+        append_perf_report "${case_name}" "link_failed" "" "" "${compile_ms}" "${link_ms}" 0 "LLVM IR link failed"
         SUITE_NG_COUNT=$((SUITE_NG_COUNT + 1))
         continue
       fi
@@ -1092,6 +1215,7 @@ run_mode_suite() {
       if [[ -z "${ASM_CC}" ]]; then
         print_case_failure "${case_name}" "missing assembler/linker"
         record_failure "${case_name}" "missing assembler/linker"
+        append_perf_report "${case_name}" "missing_asm_cc" "" "" "${compile_ms}" "" 0 "missing assembler/linker"
         SUITE_NG_COUNT=$((SUITE_NG_COUNT + 1))
         continue
       fi
@@ -1099,23 +1223,33 @@ run_mode_suite() {
       if ! command -v "${ASM_CC}" >/dev/null 2>&1; then
         print_case_failure "${case_name}" "invalid ASM_CC"
         record_failure "${case_name}" "invalid ASM_CC"
+        append_perf_report "${case_name}" "invalid_asm_cc" "" "" "${compile_ms}" "" 0 "invalid ASM_CC"
         SUITE_NG_COUNT=$((SUITE_NG_COUNT + 1))
         continue
       fi
 
       set +e
-      run_logged_timed_command "${CASE_LINK_TIMEOUT}" "${ASM_CC}" -g -o "${bin_file}" "${artifact_file}" "${RUNTIME_LIB}"
+      link_start_ns="$(now_ns)"
+      if [[ "${suite_mode}" == "perf" ]]; then
+        run_logged_timed_command "${CASE_LINK_TIMEOUT}" "${ASM_CC}" -DOPT_TEST -g -o "${bin_file}" "${artifact_file}" "${RUNTIME_LIB}"
+      else
+        run_logged_timed_command "${CASE_LINK_TIMEOUT}" "${ASM_CC}" -g -o "${bin_file}" "${artifact_file}" "${RUNTIME_LIB}"
+      fi
       exit_code=$?
+      link_end_ns="$(now_ns)"
       set -e
+      link_ms=$(( (link_end_ns - link_start_ns) / 1000000 ))
 
       if is_timeout_exit "${exit_code}"; then
         print_case_failure "${case_name}" "link timed out"
         record_failure "${case_name}" "link timed out"
+        append_perf_report "${case_name}" "link_timeout" "" "" "${compile_ms}" "${link_ms}" 0 "link timed out"
         SUITE_NG_COUNT=$((SUITE_NG_COUNT + 1))
         continue
       elif [[ ${exit_code} -ne 0 ]]; then
         print_case_failure "${case_name}" "link failed"
         record_failure "${case_name}" "link failed"
+        append_perf_report "${case_name}" "link_failed" "" "" "${compile_ms}" "${link_ms}" 0 "link failed"
         SUITE_NG_COUNT=$((SUITE_NG_COUNT + 1))
         continue
       fi
@@ -1125,6 +1259,7 @@ run_mode_suite() {
         if ! command -v "${ASM_RUNNER}" >/dev/null 2>&1; then
           print_case_failure "${case_name}" "invalid ASM_RUNNER"
           record_failure "${case_name}" "invalid ASM_RUNNER"
+          append_perf_report "${case_name}" "invalid_asm_runner" "" "" "${compile_ms}" "${link_ms}" 0 "invalid ASM_RUNNER"
           SUITE_NG_COUNT=$((SUITE_NG_COUNT + 1))
           continue
         fi
@@ -1136,42 +1271,72 @@ run_mode_suite() {
       fi
     fi
 
-  set +e
-  if [[ -f "${input_file}" ]]; then
-      if [[ ${QUIET_ALL_SUCCESS} -eq 1 ]]; then
-        if [[ -n "${TIMEOUT_BIN}" ]]; then
-          "${TIMEOUT_BIN}" --kill-after=5s "${CASE_RUN_TIMEOUT}" "${run_cmd[@]}" < "${input_file}" > "${result_file}" 2>/dev/null
+    wall_ms=0
+    timer_ms=0
+    for ((repeat_index = 1; repeat_index <= PERF_REPEAT; repeat_index++)); do
+      : > "${timer_file}"
+
+      set +e
+      run_start_ns="$(now_ns)"
+      if [[ -f "${input_file}" ]]; then
+        if [[ "${suite_mode}" == "perf" ]]; then
+          if [[ -n "${TIMEOUT_BIN}" ]]; then
+            "${TIMEOUT_BIN}" --kill-after=5s "${CASE_RUN_TIMEOUT}" "${run_cmd[@]}" < "${input_file}" > "${result_file}" 2> "${timer_file}"
+          else
+            "${run_cmd[@]}" < "${input_file}" > "${result_file}" 2> "${timer_file}"
+          fi
+        elif [[ ${QUIET_ALL_SUCCESS} -eq 1 ]]; then
+          if [[ -n "${TIMEOUT_BIN}" ]]; then
+            "${TIMEOUT_BIN}" --kill-after=5s "${CASE_RUN_TIMEOUT}" "${run_cmd[@]}" < "${input_file}" > "${result_file}" 2>/dev/null
+          else
+            "${run_cmd[@]}" < "${input_file}" > "${result_file}" 2>/dev/null
+          fi
         else
-          "${run_cmd[@]}" < "${input_file}" > "${result_file}" 2>/dev/null
+          if [[ -n "${TIMEOUT_BIN}" ]]; then
+            "${TIMEOUT_BIN}" --kill-after=5s "${CASE_RUN_TIMEOUT}" "${run_cmd[@]}" < "${input_file}" > "${result_file}"
+          else
+            "${run_cmd[@]}" < "${input_file}" > "${result_file}"
+          fi
         fi
       else
-        if [[ -n "${TIMEOUT_BIN}" ]]; then
-          "${TIMEOUT_BIN}" --kill-after=5s "${CASE_RUN_TIMEOUT}" "${run_cmd[@]}" < "${input_file}" > "${result_file}"
+        if [[ "${suite_mode}" == "perf" ]]; then
+          if [[ -n "${TIMEOUT_BIN}" ]]; then
+            "${TIMEOUT_BIN}" --kill-after=5s "${CASE_RUN_TIMEOUT}" "${run_cmd[@]}" > "${result_file}" 2> "${timer_file}"
+          else
+            "${run_cmd[@]}" > "${result_file}" 2> "${timer_file}"
+          fi
+        elif [[ ${QUIET_ALL_SUCCESS} -eq 1 ]]; then
+          if [[ -n "${TIMEOUT_BIN}" ]]; then
+            "${TIMEOUT_BIN}" --kill-after=5s "${CASE_RUN_TIMEOUT}" "${run_cmd[@]}" > "${result_file}" 2>/dev/null
+          else
+            "${run_cmd[@]}" > "${result_file}" 2>/dev/null
+          fi
         else
-          "${run_cmd[@]}" < "${input_file}" > "${result_file}"
+          if [[ -n "${TIMEOUT_BIN}" ]]; then
+            "${TIMEOUT_BIN}" --kill-after=5s "${CASE_RUN_TIMEOUT}" "${run_cmd[@]}" > "${result_file}"
+          else
+            "${run_cmd[@]}" > "${result_file}"
+          fi
         fi
       fi
-  else
-      if [[ ${QUIET_ALL_SUCCESS} -eq 1 ]]; then
-        if [[ -n "${TIMEOUT_BIN}" ]]; then
-          "${TIMEOUT_BIN}" --kill-after=5s "${CASE_RUN_TIMEOUT}" "${run_cmd[@]}" > "${result_file}" 2>/dev/null
-        else
-          "${run_cmd[@]}" > "${result_file}" 2>/dev/null
-        fi
-      else
-        if [[ -n "${TIMEOUT_BIN}" ]]; then
-          "${TIMEOUT_BIN}" --kill-after=5s "${CASE_RUN_TIMEOUT}" "${run_cmd[@]}" > "${result_file}"
-        else
-          "${run_cmd[@]}" > "${result_file}"
-        fi
+      exit_code=$?
+      run_end_ns="$(now_ns)"
+      set -e
+
+      wall_ms=$((wall_ms + (run_end_ns - run_start_ns) / 1000000))
+      if [[ "${suite_mode}" == "perf" ]] && parsed_timer_ms="$(parse_perf_timer_ms "${timer_file}")"; then
+        timer_ms=$((timer_ms + parsed_timer_ms))
       fi
-  fi
-  exit_code=$?
-  set -e
+
+      if [[ ${exit_code} -ne 0 ]]; then
+        break
+      fi
+    done
 
     if is_timeout_exit "${exit_code}"; then
       print_case_failure "${case_name}" "run timed out"
       record_failure "${case_name}" "run timed out"
+      append_perf_report "${case_name}" "run_timeout" "${timer_ms}" "${wall_ms}" "${compile_ms}" "${link_ms}" "${repeat_index}" "run timed out"
       SUITE_NG_COUNT=$((SUITE_NG_COUNT + 1))
       continue
     fi
@@ -1186,12 +1351,31 @@ run_mode_suite() {
 
     if diff -a --strip-trailing-cr "${result_file}" "${output_file}" >/dev/null; then
       SUITE_OK_COUNT=$((SUITE_OK_COUNT + 1))
+      if [[ "${suite_mode}" == "perf" ]]; then
+        if [[ ${timer_ms} -eq 0 ]]; then
+          timer_ms="${wall_ms}"
+        fi
+        PERF_TOTAL_TIMER_MS=$((PERF_TOTAL_TIMER_MS + timer_ms))
+        PERF_TOTAL_WALL_MS=$((PERF_TOTAL_WALL_MS + wall_ms))
+        PERF_MEASURED_COUNT=$((PERF_MEASURED_COUNT + 1))
+        append_perf_report "${case_name}" "ok" "${timer_ms}" "${wall_ms}" "${compile_ms}" "${link_ms}" "${PERF_REPEAT}" "ok"
+        if [[ ${QUIET_ALL_SUCCESS} -eq 0 ]]; then
+          printf 'perf %s: timer_ms=%s wall_ms=%s compile_ms=%s link_ms=%s\n' \
+            "${case_name}" "${timer_ms}" "${wall_ms}" "${compile_ms}" "${link_ms}"
+        fi
+      fi
     else
       print_case_failure "${case_name}" "mismatch"
       record_failure "${case_name}" "output mismatch"
+      append_perf_report "${case_name}" "mismatch" "${timer_ms}" "${wall_ms}" "${compile_ms}" "${link_ms}" "${PERF_REPEAT}" "output mismatch"
       SUITE_NG_COUNT=$((SUITE_NG_COUNT + 1))
     fi
   done
+
+  if [[ "${suite_mode}" == "perf" && ${PERF_MEASURED_COUNT} -gt 0 ]]; then
+    printf 'PERF score timer_ms_total=%d wall_ms_total=%d measured=%d lower_is_better\n' \
+      "${PERF_TOTAL_TIMER_MS}" "${PERF_TOTAL_WALL_MS}" "${PERF_MEASURED_COUNT}"
+  fi
 }
 
 run_plan_section() {
