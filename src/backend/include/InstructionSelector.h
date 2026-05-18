@@ -1,12 +1,15 @@
 #pragma once
 
+#include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "FrameLayout.h"
 #include "MachineIR.h"
 
 class BasicBlock;
+class Value;
 
 class InstructionSelector {
 
@@ -19,6 +22,7 @@ private:
 	void translateBlock(const IRBasicBlockView & block, bool isEntryBlock);
 	void translateInst(const IRInstView & inst);
 	void translateEntry();
+	void analyzeLocalValues();
 	void translateAlloca(const IRInstView & inst);
 	void translateLoad(const IRInstView & inst);
 	void translateStore(const IRInstView & inst);
@@ -38,6 +42,10 @@ private:
 	MachineOperand loadValue(const IRValueView & value);
 	void loadValueTo(const IRValueView & value, const MachineOperand & dst);
 	void storeValue(const MachineOperand & src, const IRValueView & value);
+	[[nodiscard]] std::optional<MachineOperand> cachedValue(const IRValueView & value) const;
+	bool rememberValue(Value * value, const MachineOperand & operand);
+	[[nodiscard]] bool isLocalOnlyValue(const IRValueView & value) const;
+	[[nodiscard]] bool isDefinedInCurrentBlock(const IRValueView & value) const;
 	void storeZeroInitializer(const IRValueView & ptr, Type * valueType);
 	void loadAddress(const IRValueView & value, const MachineOperand & dst);
 	void loadFromPointer(const IRValueView & ptr, Type * valueType, const MachineOperand & dst);
@@ -60,6 +68,11 @@ private:
 	const FunctionFrameLayout & frameLayout;
 	MachineFunction machineFunction;
 	std::unordered_map<BasicBlock *, std::string> blockLabels;
+	std::unordered_map<Value *, BasicBlock *> valueBlocks;
+	std::unordered_set<Value *> localOnlyValues;
+	std::unordered_set<BasicBlock *> callBlocks;
+	std::unordered_map<Value *, MachineOperand> localValueCache;
 	BasicBlock * currentIRBlock = nullptr;
+	bool localValueCacheEnabled = true;
 	int nextLabelIndex = 0;
 };

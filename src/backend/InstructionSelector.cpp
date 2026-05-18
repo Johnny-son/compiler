@@ -12,6 +12,7 @@
 #include "AllocaInst.h"
 #include "BinaryInst.h"
 #include "BranchInst.h"
+#include "CallInst.h"
 #include "CastInst.h"
 #include "FCmpInst.h"
 #include "GetElementPtrInst.h"
@@ -157,6 +158,7 @@ InstructionSelector::InstructionSelector(IRFunctionView function, const Function
 
 MachineFunction InstructionSelector::run()
 {
+	analyzeLocalValues();
 	machineFunction.createBlock(function.name());
 	translateEntry();
 
@@ -180,8 +182,59 @@ void InstructionSelector::translateBlock(const IRBasicBlockView & block, bool is
 	}
 
 	currentIRBlock = block.raw();
+	localValueCache.clear();
 	for (const auto & inst: block.instructions()) {
 		translateInst(inst);
+	}
+}
+
+void InstructionSelector::analyzeLocalValues()
+{
+	valueBlocks.clear();
+	localOnlyValues.clear();
+	callBlocks.clear();
+	localValueCacheEnabled = true;
+
+	for (const auto & block: function.blocks()) {
+		for (const auto & inst: block.instructions()) {
+			if (inst.type() != nullptr && inst.type()->isFloatType()) {
+				localValueCacheEnabled = false;
+			}
+			for (int32_t index = 0; index < inst.operandCount(); ++index) {
+				if (inst.operand(index).type() != nullptr && inst.operand(index).type()->isFloatType()) {
+					localValueCacheEnabled = false;
+				}
+			}
+			if (inst.raw() != nullptr) {
+				valueBlocks[inst.raw()] = block.raw();
+			}
+			if (dynamic_cast<CallInst *>(inst.raw()) != nullptr) {
+				callBlocks.insert(block.raw());
+			}
+		}
+	}
+
+	for (const auto & block: function.blocks()) {
+		for (const auto & inst: block.instructions()) {
+			auto * rawInst = inst.raw();
+			if (rawInst == nullptr || !inst.hasResult()) {
+				continue;
+			}
+
+			bool localOnly = true;
+			for (auto * use: rawInst->getUseList()) {
+				auto * userInst = dynamic_cast<Instruction *>(use->getUser());
+				auto iter = userInst == nullptr ? valueBlocks.end() : valueBlocks.find(userInst);
+				if (iter == valueBlocks.end() || iter->second != block.raw()) {
+					localOnly = false;
+					break;
+				}
+			}
+
+			if (localOnly) {
+				localOnlyValues.insert(rawInst);
+			}
+		}
 	}
 }
 
@@ -697,6 +750,7 @@ void InstructionSelector::translateCall(const IRInstView & inst)
 		const PhysicalReg returnReg = regClassForType(inst.type()) == RegisterClass::FPR ? PhysicalReg::FA0 : PhysicalReg::A0;
 		storeValue(MachineOperand::pregUse(returnReg), inst.result());
 	}
+	localValueCache.clear();
 }
 
 void InstructionSelector::translatePhi(const IRInstView &)
@@ -807,6 +861,12 @@ MachineOperand InstructionSelector::newVRegDef(Type * type)
 
 MachineOperand InstructionSelector::loadValue(const IRValueView & value)
 {
+	if (auto cached = cachedValue(value); cached.has_value()) {
+		auto dst = newVRegDef(value.type());
+		machineFunction.emit(MachineOpcode::COPY, {dst.asDef(), cached->asUse()});
+		return dst;
+	}
+
 	auto dst = newVRegDef(value.type());
 	loadValueTo(value, dst);
 	return dst;
@@ -814,6 +874,11 @@ MachineOperand InstructionSelector::loadValue(const IRValueView & value)
 
 void InstructionSelector::loadValueTo(const IRValueView & value, const MachineOperand & dst)
 {
+	if (auto cached = cachedValue(value); cached.has_value()) {
+		machineFunction.emit(MachineOpcode::COPY, {dst.asDef(), cached->asUse()});
+		return;
+	}
+
 	if (!value.valid()) {
 		machineFunction.emit(MachineOpcode::COPY, {dst.asDef(), MachineOperand::pregUse(PhysicalReg::Zero)});
 		return;
@@ -856,6 +921,14 @@ void InstructionSelector::storeValue(const MachineOperand & src, const IRValueVi
 		return;
 	}
 
+	const bool canCacheValue =
+		localValueCacheEnabled && (value.type() == nullptr || regClassForType(value.type()) == RegisterClass::GPR);
+	const bool cached = canCacheValue && isDefinedInCurrentBlock(value) && rememberValue(value.raw(), src);
+	if (cached && isLocalOnlyValue(value) && isDefinedInCurrentBlock(value) &&
+		callBlocks.find(currentIRBlock) == callBlocks.end()) {
+		return;
+	}
+
 	if (value.isGlobalVariable()) {
 		auto address = newVRegDef();
 		loadAddressOfGlobal(value, address);
@@ -868,6 +941,55 @@ void InstructionSelector::storeValue(const MachineOperand & src, const IRValueVi
 		(void) slot;
 		machineFunction.emit(storeOpcode(value.type()), {src.asUse(), MachineOperand::stackSlot(value.raw())});
 	}
+}
+
+std::optional<MachineOperand> InstructionSelector::cachedValue(const IRValueView & value) const
+{
+	if (!localValueCacheEnabled) {
+		return std::nullopt;
+	}
+	if (!value.valid()) {
+		return std::nullopt;
+	}
+
+	auto iter = localValueCache.find(value.raw());
+	if (iter == localValueCache.end()) {
+		return std::nullopt;
+	}
+	return iter->second;
+}
+
+bool InstructionSelector::rememberValue(Value * value, const MachineOperand & operand)
+{
+	if (value == nullptr) {
+		return false;
+	}
+
+	MachineOperand cached;
+	if (operand.kind == MachineOperandKind::VirtualReg) {
+		cached = operand.asUse();
+	} else if (operand.kind == MachineOperandKind::PhysicalReg && operand.preg == PhysicalReg::Zero) {
+		cached = operand.asUse();
+	} else {
+		return false;
+	}
+
+	localValueCache[value] = cached;
+	return true;
+}
+
+bool InstructionSelector::isLocalOnlyValue(const IRValueView & value) const
+{
+	return value.valid() && localOnlyValues.find(value.raw()) != localOnlyValues.end();
+}
+
+bool InstructionSelector::isDefinedInCurrentBlock(const IRValueView & value) const
+{
+	if (!value.valid() || currentIRBlock == nullptr) {
+		return false;
+	}
+	auto iter = valueBlocks.find(value.raw());
+	return iter != valueBlocks.end() && iter->second == currentIRBlock;
 }
 
 void InstructionSelector::storeZeroInitializer(const IRValueView & ptr, Type * valueType)
