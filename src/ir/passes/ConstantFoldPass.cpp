@@ -172,6 +172,53 @@ Value * foldIntegerCompareIdentity(Module & module, ICmpInst * inst, Value * lhs
 	return nullptr;
 }
 
+Value * foldZExtBoolCompare(ICmpInst * inst, Value * lhs, Value * rhs)
+{
+	if (inst == nullptr) {
+		return nullptr;
+	}
+
+	auto matchZExtBool = [](Value * value) -> Value * {
+		auto * zext = dynamic_cast<ZExtInst *>(value);
+		if (zext == nullptr || zext->getOperandsNum() != 1) {
+			return nullptr;
+		}
+
+		auto * source = zext->getSourceValue();
+		return source != nullptr && source->getType() != nullptr && source->getType()->isInt1Byte() ? source : nullptr;
+	};
+
+	auto * lhsBool = matchZExtBool(lhs);
+	auto * rhsBool = matchZExtBool(rhs);
+	auto * lhsConst = dynamic_cast<ConstInt *>(lhs);
+	auto * rhsConst = dynamic_cast<ConstInt *>(rhs);
+
+	switch (inst->getPredicate()) {
+		case ICmpInst::Predicate::NE:
+			if (lhsBool != nullptr && rhsConst != nullptr && rhsConst->getVal() == 0) {
+				return lhsBool;
+			}
+			if (rhsBool != nullptr && lhsConst != nullptr && lhsConst->getVal() == 0) {
+				return rhsBool;
+			}
+			break;
+		case ICmpInst::Predicate::EQ:
+			if (lhsBool != nullptr && rhsConst != nullptr && rhsConst->getVal() == 1) {
+				return lhsBool;
+			}
+			if (rhsBool != nullptr && lhsConst != nullptr && lhsConst->getVal() == 1) {
+				return rhsBool;
+			}
+			break;
+		case ICmpInst::Predicate::SLT:
+		case ICmpInst::Predicate::SLE:
+		case ICmpInst::Predicate::SGT:
+		case ICmpInst::Predicate::SGE:
+			break;
+	}
+	return nullptr;
+}
+
 Value * foldFloatCompare(Module & module, FCmpInst * inst, ConstFloat * lhs, ConstFloat * rhs)
 {
 	const float left = lhs->getVal();
@@ -265,6 +312,9 @@ Value * foldInstruction(Module & module, Instruction * inst)
 		auto * rhsInt = dynamic_cast<ConstInt *>(rhs);
 		if (lhsInt != nullptr && rhsInt != nullptr) {
 			return foldIntegerCompare(module, icmp, lhsInt, rhsInt);
+		}
+		if (auto * replacement = foldZExtBoolCompare(icmp, lhs, rhs); replacement != nullptr) {
+			return replacement;
 		}
 		return foldIntegerCompareIdentity(module, icmp, lhs, rhs);
 	}
