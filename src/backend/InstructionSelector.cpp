@@ -326,7 +326,20 @@ void InstructionSelector::translateBinary(const IRInstView & inst)
 		const auto rhsValue = inst.operand(1);
 		const auto op = binaryInst->getBinaryOp();
 
+		auto copyToResult = [&](const IRValueView & value) {
+			auto loaded = loadValue(value);
+			storeValue(loaded.asUse(), inst.result());
+		};
+
 		if (op == BinaryInst::Op::Add) {
+			if (rhsValue.isConstantInt() && rhsValue.intValue() == 0) {
+				copyToResult(lhsValue);
+				return;
+			}
+			if (lhsValue.isConstantInt() && lhsValue.intValue() == 0) {
+				copyToResult(rhsValue);
+				return;
+			}
 			if (rhsValue.isConstantInt() && isSigned12Bit(rhsValue.intValue())) {
 				auto lhs = loadValue(lhsValue);
 				auto result = newVRegDef(inst.type());
@@ -348,6 +361,10 @@ void InstructionSelector::translateBinary(const IRInstView & inst)
 		}
 
 		if (op == BinaryInst::Op::Sub && rhsValue.isConstantInt()) {
+			if (rhsValue.intValue() == 0) {
+				copyToResult(lhsValue);
+				return;
+			}
 			const int64_t negated = -static_cast<int64_t>(rhsValue.intValue());
 			if (isSigned12Bit(negated)) {
 				auto lhs = loadValue(lhsValue);
@@ -356,6 +373,47 @@ void InstructionSelector::translateBinary(const IRInstView & inst)
 				storeValue(result.asUse(), inst.result());
 				return;
 			}
+		}
+
+		if (op == BinaryInst::Op::Mul && (lhsValue.isConstantInt() || rhsValue.isConstantInt())) {
+			const IRValueView constValue = lhsValue.isConstantInt() ? lhsValue : rhsValue;
+			const IRValueView variableValue = lhsValue.isConstantInt() ? rhsValue : lhsValue;
+			const int32_t factor = constValue.intValue();
+			if (factor == 0) {
+				storeValue(MachineOperand::pregUse(PhysicalReg::Zero), inst.result());
+				return;
+			}
+			if (factor == 1) {
+				copyToResult(variableValue);
+				return;
+			}
+			auto value = loadValue(variableValue);
+			auto result = newVRegDef(inst.type());
+			if (factor == -1) {
+				machineFunction.emit(
+					MachineOpcode::SUBW,
+					{result, MachineOperand::pregUse(PhysicalReg::Zero), value.asUse()});
+				storeValue(result.asUse(), inst.result());
+				return;
+			}
+			if (isPowerOfTwo(factor)) {
+				machineFunction.emit(
+					MachineOpcode::SLLI,
+					{result, value.asUse(), MachineOperand::immValue(log2Int(factor))});
+				storeValue(result.asUse(), inst.result());
+				return;
+			}
+		}
+
+		if (op == BinaryInst::Op::SDiv && rhsValue.isConstantInt() && rhsValue.intValue() == 1) {
+			copyToResult(lhsValue);
+			return;
+		}
+
+		if (op == BinaryInst::Op::SRem && rhsValue.isConstantInt() &&
+			(rhsValue.intValue() == 1 || rhsValue.intValue() == -1)) {
+			storeValue(MachineOperand::pregUse(PhysicalReg::Zero), inst.result());
+			return;
 		}
 	}
 
