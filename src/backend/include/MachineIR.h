@@ -97,6 +97,10 @@ enum class MachineOpcode : std::int16_t {
 	COPY,
 	CALL,
 	J,
+	BEQ,
+	BNE,
+	BLT,
+	BGE,
 	BNEZ,
 	RET
 };

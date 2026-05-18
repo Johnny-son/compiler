@@ -89,6 +89,14 @@ const char * opcodeName(MachineOpcode opcode)
 			return "call";
 		case MachineOpcode::J:
 			return "j";
+		case MachineOpcode::BEQ:
+			return "beq";
+		case MachineOpcode::BNE:
+			return "bne";
+		case MachineOpcode::BLT:
+			return "blt";
+		case MachineOpcode::BGE:
+			return "bge";
 		case MachineOpcode::BNEZ:
 			return "bnez";
 		case MachineOpcode::RET:

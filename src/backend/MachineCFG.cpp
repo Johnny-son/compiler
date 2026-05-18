@@ -47,7 +47,9 @@ void MachineCFGBuilder::run(MachineFunction & function) const
 
 bool MachineCFGBuilder::isTerminator(MachineOpcode opcode)
 {
-	return opcode == MachineOpcode::J || opcode == MachineOpcode::BNEZ || opcode == MachineOpcode::RET;
+	return opcode == MachineOpcode::J || opcode == MachineOpcode::BEQ || opcode == MachineOpcode::BNE ||
+		   opcode == MachineOpcode::BLT || opcode == MachineOpcode::BGE || opcode == MachineOpcode::BNEZ ||
+		   opcode == MachineOpcode::RET;
 }
 
 bool MachineCFGBuilder::isBarrierTerminator(MachineOpcode opcode)
@@ -66,6 +68,13 @@ bool MachineCFGBuilder::targetLabel(const MachineInstr & inst, std::string & lab
 	if (inst.opcode == MachineOpcode::BNEZ && inst.operands.size() >= 2 &&
 		inst.operands[1].kind == MachineOperandKind::BlockLabel) {
 		label = inst.operands[1].text;
+		return true;
+	}
+
+	if ((inst.opcode == MachineOpcode::BEQ || inst.opcode == MachineOpcode::BNE ||
+	     inst.opcode == MachineOpcode::BLT || inst.opcode == MachineOpcode::BGE) &&
+		inst.operands.size() >= 3 && inst.operands[2].kind == MachineOperandKind::BlockLabel) {
+		label = inst.operands[2].text;
 		return true;
 	}
 

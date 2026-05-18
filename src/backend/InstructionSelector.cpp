@@ -11,6 +11,7 @@
 #include "Type.h"
 #include "AllocaInst.h"
 #include "BinaryInst.h"
+#include "BranchInst.h"
 #include "CastInst.h"
 #include "FCmpInst.h"
 #include "GetElementPtrInst.h"
@@ -18,6 +19,7 @@
 #include "PhiInst.h"
 #include "ArrayType.h"
 #include "PointerType.h"
+#include "Use.h"
 #include "ZeroInitializer.h"
 
 namespace {
@@ -103,6 +105,21 @@ int32_t log2Int(int32_t value)
 	return shift;
 }
 
+bool isOnlyUsedByConditionalBranches(Instruction * inst)
+{
+	if (inst == nullptr || inst->getUseList().empty()) {
+		return false;
+	}
+
+	for (auto * use: inst->getUseList()) {
+		auto * branch = dynamic_cast<BranchInst *>(use->getUser());
+		if (branch == nullptr || !branch->isConditional()) {
+			return false;
+		}
+	}
+	return true;
+}
+
 } // namespace
 
 InstructionSelector::InstructionSelector(IRFunctionView function, const FunctionFrameLayout & layout)
@@ -155,6 +172,9 @@ void InstructionSelector::translateInst(const IRInstView & inst)
 			translateBinary(inst);
 			break;
 		case IRInstKind::ICmp:
+			if (isOnlyUsedByConditionalBranches(inst.raw())) {
+				break;
+			}
 			translateICmp(inst);
 			break;
 		case IRInstKind::FCmp:
@@ -610,10 +630,47 @@ void InstructionSelector::translateBranch(const IRInstView & inst)
 	const bool trueNeedsCopies = hasPhiCopiesForEdge(trueTarget, currentIRBlock);
 	const std::string trueLabel = trueNeedsCopies ? edgeCopyLabel(currentIRBlock, trueTarget) : labelName(trueTarget);
 
-	auto cond = loadValue(inst.operand(0));
-	machineFunction.emit(MachineOpcode::BNEZ, {cond.asUse(), MachineOperand::blockLabel(trueLabel)});
+	auto loadBranchOperand = [&](const IRValueView & value) {
+		if (value.isConstantInt() && value.intValue() == 0) {
+			return MachineOperand::pregUse(PhysicalReg::Zero);
+		}
+		return loadValue(value).asUse();
+	};
 
-	// The false edge is the fall-through path after BNEZ, so its copies can be emitted inline.
+	auto * cmpInst = dynamic_cast<ICmpInst *>(inst.operand(0).raw());
+	if (cmpInst != nullptr && cmpInst->getOperandsNum() == 2) {
+		auto lhs = loadBranchOperand(IRValueView(cmpInst->getOperand(0)));
+		auto rhs = loadBranchOperand(IRValueView(cmpInst->getOperand(1)));
+		MachineOpcode branchOpcode = MachineOpcode::BNE;
+		switch (cmpInst->getPredicate()) {
+			case ICmpInst::Predicate::EQ:
+				branchOpcode = MachineOpcode::BEQ;
+				break;
+			case ICmpInst::Predicate::NE:
+				branchOpcode = MachineOpcode::BNE;
+				break;
+			case ICmpInst::Predicate::SLT:
+				branchOpcode = MachineOpcode::BLT;
+				break;
+			case ICmpInst::Predicate::SGT:
+				branchOpcode = MachineOpcode::BLT;
+				std::swap(lhs, rhs);
+				break;
+			case ICmpInst::Predicate::SLE:
+				branchOpcode = MachineOpcode::BGE;
+				std::swap(lhs, rhs);
+				break;
+			case ICmpInst::Predicate::SGE:
+				branchOpcode = MachineOpcode::BGE;
+				break;
+		}
+		machineFunction.emit(branchOpcode, {lhs, rhs, MachineOperand::blockLabel(trueLabel)});
+	} else {
+		auto cond = loadValue(inst.operand(0));
+		machineFunction.emit(MachineOpcode::BNEZ, {cond.asUse(), MachineOperand::blockLabel(trueLabel)});
+	}
+
+	// The false edge is the fall-through path after the conditional branch, so its copies can be emitted inline.
 	emitPhiCopies(falseTarget, currentIRBlock);
 	machineFunction.emit(MachineOpcode::J, {MachineOperand::blockLabel(labelName(falseTarget))});
 
