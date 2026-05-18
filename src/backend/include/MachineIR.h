@@ -59,6 +59,7 @@ enum class PhysicalReg : std::int16_t {
 
 enum class MachineOpcode : std::int16_t {
 	ADDI,
+	ADDIW,
 	ADD,
 	ADDW,
 	SUBW,

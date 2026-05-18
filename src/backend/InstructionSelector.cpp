@@ -88,6 +88,11 @@ bool isPowerOfTwo(int32_t value)
 	return value > 0 && (value & (value - 1)) == 0;
 }
 
+bool isSigned12Bit(int64_t value)
+{
+	return value >= -2048 && value <= 2047;
+}
+
 int32_t log2Int(int32_t value)
 {
 	int32_t shift = 0;
@@ -267,6 +272,44 @@ void InstructionSelector::translateBinary(const IRInstView & inst)
 		return;
 	}
 
+	if (inst.type() != nullptr && inst.type()->isInt32Type()) {
+		const auto lhsValue = inst.operand(0);
+		const auto rhsValue = inst.operand(1);
+		const auto op = binaryInst->getBinaryOp();
+
+		if (op == BinaryInst::Op::Add) {
+			if (rhsValue.isConstantInt() && isSigned12Bit(rhsValue.intValue())) {
+				auto lhs = loadValue(lhsValue);
+				auto result = newVRegDef(inst.type());
+				machineFunction.emit(
+					MachineOpcode::ADDIW,
+					{result, lhs.asUse(), MachineOperand::immValue(rhsValue.intValue())});
+				storeValue(result.asUse(), inst.result());
+				return;
+			}
+			if (lhsValue.isConstantInt() && isSigned12Bit(lhsValue.intValue())) {
+				auto rhs = loadValue(rhsValue);
+				auto result = newVRegDef(inst.type());
+				machineFunction.emit(
+					MachineOpcode::ADDIW,
+					{result, rhs.asUse(), MachineOperand::immValue(lhsValue.intValue())});
+				storeValue(result.asUse(), inst.result());
+				return;
+			}
+		}
+
+		if (op == BinaryInst::Op::Sub && rhsValue.isConstantInt()) {
+			const int64_t negated = -static_cast<int64_t>(rhsValue.intValue());
+			if (isSigned12Bit(negated)) {
+				auto lhs = loadValue(lhsValue);
+				auto result = newVRegDef(inst.type());
+				machineFunction.emit(MachineOpcode::ADDIW, {result, lhs.asUse(), MachineOperand::immValue(negated)});
+				storeValue(result.asUse(), inst.result());
+				return;
+			}
+		}
+	}
+
 	MachineOpcode opcode = MachineOpcode::ADDW;
 	switch (binaryInst->getBinaryOp()) {
 		case BinaryInst::Op::Add:
@@ -314,31 +357,38 @@ void InstructionSelector::translateICmp(const IRInstView & inst)
 		return;
 	}
 
-	auto lhs = loadValue(inst.operand(0));
-	auto rhs = loadValue(inst.operand(1));
+	auto loadCompareOperand = [&](const IRValueView & value) {
+		if (value.isConstantInt() && value.intValue() == 0) {
+			return MachineOperand::pregUse(PhysicalReg::Zero);
+		}
+		return loadValue(value).asUse();
+	};
+
+	auto lhs = loadCompareOperand(inst.operand(0));
+	auto rhs = loadCompareOperand(inst.operand(1));
 	auto result = newVRegDef();
 
 	switch (cmpInst->getPredicate()) {
 		case ICmpInst::Predicate::EQ:
-			machineFunction.emit(MachineOpcode::XOR, {result, lhs.asUse(), rhs.asUse()});
+			machineFunction.emit(MachineOpcode::XOR, {result, lhs, rhs});
 			machineFunction.emit(MachineOpcode::SEQZ, {result.asDef(), result.asUse()});
 			break;
 		case ICmpInst::Predicate::NE:
-			machineFunction.emit(MachineOpcode::XOR, {result, lhs.asUse(), rhs.asUse()});
+			machineFunction.emit(MachineOpcode::XOR, {result, lhs, rhs});
 			machineFunction.emit(MachineOpcode::SNEZ, {result.asDef(), result.asUse()});
 			break;
 		case ICmpInst::Predicate::SLT:
-			machineFunction.emit(MachineOpcode::SLT, {result, lhs.asUse(), rhs.asUse()});
+			machineFunction.emit(MachineOpcode::SLT, {result, lhs, rhs});
 			break;
 		case ICmpInst::Predicate::SGT:
-			machineFunction.emit(MachineOpcode::SLT, {result, rhs.asUse(), lhs.asUse()});
+			machineFunction.emit(MachineOpcode::SLT, {result, rhs, lhs});
 			break;
 		case ICmpInst::Predicate::SLE:
-			machineFunction.emit(MachineOpcode::SLT, {result, rhs.asUse(), lhs.asUse()});
+			machineFunction.emit(MachineOpcode::SLT, {result, rhs, lhs});
 			machineFunction.emit(MachineOpcode::XORI, {result.asDef(), result.asUse(), MachineOperand::immValue(1)});
 			break;
 		case ICmpInst::Predicate::SGE:
-			machineFunction.emit(MachineOpcode::SLT, {result, lhs.asUse(), rhs.asUse()});
+			machineFunction.emit(MachineOpcode::SLT, {result, lhs, rhs});
 			machineFunction.emit(MachineOpcode::XORI, {result.asDef(), result.asUse(), MachineOperand::immValue(1)});
 			break;
 	}

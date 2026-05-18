@@ -141,6 +141,8 @@ std::string MachineAsmLowering::opcodeName(MachineOpcode opcode) const
 	switch (opcode) {
 		case MachineOpcode::ADDI:
 			return "addi";
+		case MachineOpcode::ADDIW:
+			return "addiw";
 		case MachineOpcode::ADD:
 			return "add";
 		case MachineOpcode::ADDW:

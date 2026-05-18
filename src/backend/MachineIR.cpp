@@ -13,6 +13,8 @@ const char * opcodeName(MachineOpcode opcode)
 	switch (opcode) {
 		case MachineOpcode::ADDI:
 			return "addi";
+		case MachineOpcode::ADDIW:
+			return "addiw";
 		case MachineOpcode::ADD:
 			return "add";
 		case MachineOpcode::ADDW:
