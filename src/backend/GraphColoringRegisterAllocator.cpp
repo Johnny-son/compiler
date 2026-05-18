@@ -5,6 +5,7 @@
 #include "MachineLiveness.h"
 
 #include <algorithm>
+#include <iterator>
 #include <map>
 #include <optional>
 #include <set>
@@ -23,6 +24,31 @@ const PhysicalReg allocatableGPRs[] = {
 	PhysicalReg::T4,
 	PhysicalReg::T5,
 	PhysicalReg::T6,
+	PhysicalReg::S1,
+	PhysicalReg::S2,
+	PhysicalReg::S3,
+	PhysicalReg::S4,
+	PhysicalReg::S5,
+	PhysicalReg::S6,
+	PhysicalReg::S7,
+	PhysicalReg::S8,
+	PhysicalReg::S9,
+	PhysicalReg::S10,
+	PhysicalReg::S11,
+};
+
+const PhysicalReg calleeSavedGPRs[] = {
+	PhysicalReg::S1,
+	PhysicalReg::S2,
+	PhysicalReg::S3,
+	PhysicalReg::S4,
+	PhysicalReg::S5,
+	PhysicalReg::S6,
+	PhysicalReg::S7,
+	PhysicalReg::S8,
+	PhysicalReg::S9,
+	PhysicalReg::S10,
+	PhysicalReg::S11,
 };
 
 const PhysicalReg allocatableFPRs[] = {
@@ -48,6 +74,24 @@ std::vector<PhysicalReg> allocatableRegsFor(RegisterClass regClass)
 	return std::vector<PhysicalReg>(std::begin(allocatableGPRs), std::end(allocatableGPRs));
 }
 
+std::vector<PhysicalReg> calleeSavedRegsFor(RegisterClass regClass)
+{
+	if (regClass == RegisterClass::GPR) {
+		return std::vector<PhysicalReg>(std::begin(calleeSavedGPRs), std::end(calleeSavedGPRs));
+	}
+	return {};
+}
+
+bool isCalleeSavedGPR(PhysicalReg reg)
+{
+	for (PhysicalReg calleeSaved: calleeSavedGPRs) {
+		if (calleeSaved == reg) {
+			return true;
+		}
+	}
+	return false;
+}
+
 MachineOpcode spillLoadOpcode(RegisterClass regClass)
 {
 	return regClass == RegisterClass::FPR ? MachineOpcode::FLW : MachineOpcode::LD;
@@ -61,7 +105,9 @@ MachineOpcode spillStoreOpcode(RegisterClass regClass)
 struct InterferenceGraph {
 	std::map<int32_t, std::set<int32_t>> neighbors;
 	std::map<int32_t, RegisterClass> classes;
+	std::map<int32_t, std::set<PhysicalReg>> forbiddenColors;
 	std::set<int32_t> mustSpill;
+	std::set<int32_t> callLive;
 
 	void addNode(int32_t vreg, RegisterClass regClass = RegisterClass::GPR)
 	{
@@ -86,6 +132,13 @@ struct InterferenceGraph {
 		}
 		neighbors[lhs].insert(rhs);
 		neighbors[rhs].insert(lhs);
+	}
+
+	void forbidColor(int32_t vreg, PhysicalReg reg)
+	{
+		if (vreg >= 0 && TargetRegisterInfo::isValid(reg)) {
+			forbiddenColors[vreg].insert(reg);
+		}
 	}
 
 	int degree(int32_t vreg) const
@@ -118,6 +171,16 @@ void collectOperandNodes(const MachineFunction & function, const MachineOperand 
 	}
 }
 
+void collectPhysicalDefs(const MachineInstr & inst, std::set<PhysicalReg> & defs)
+{
+	for (const auto & operand: inst.operands) {
+		if (operand.kind == MachineOperandKind::PhysicalReg && operand.role == MachineOperandRole::Def) {
+			defs.insert(operand.preg);
+		}
+	}
+	defs.insert(inst.implicitDefs.begin(), inst.implicitDefs.end());
+}
+
 InterferenceGraph buildInterferenceGraph(const MachineFunction & function, const MachineLivenessResult & liveness)
 {
 	InterferenceGraph graph;
@@ -145,8 +208,22 @@ InterferenceGraph buildInterferenceGraph(const MachineFunction & function, const
 				}
 			}
 
+			std::set<PhysicalReg> physicalDefs;
+			collectPhysicalDefs(inst, physicalDefs);
+			for (PhysicalReg reg: physicalDefs) {
+				for (int32_t live: info.liveOut) {
+					graph.forbidColor(live, reg);
+				}
+			}
+
 			if (inst.opcode == MachineOpcode::CALL) {
-				graph.mustSpill.insert(info.liveOut.begin(), info.liveOut.end());
+				for (int32_t live: info.liveOut) {
+					if (classOf(function, live) == RegisterClass::GPR) {
+						graph.callLive.insert(live);
+					} else {
+						graph.mustSpill.insert(live);
+					}
+				}
 			}
 		}
 	}
@@ -172,7 +249,31 @@ int colorCountFor(int32_t vreg, const InterferenceGraph & graph)
 {
 	auto classIter = graph.classes.find(vreg);
 	const RegisterClass regClass = classIter != graph.classes.end() ? classIter->second : RegisterClass::GPR;
+	if (graph.callLive.find(vreg) != graph.callLive.end()) {
+		return static_cast<int>(calleeSavedRegsFor(regClass).size());
+	}
 	return static_cast<int>(allocatableRegsFor(regClass).size());
+}
+
+std::vector<PhysicalReg> candidateRegsFor(int32_t vreg, const InterferenceGraph & graph)
+{
+	auto classIter = graph.classes.find(vreg);
+	const RegisterClass regClass = classIter != graph.classes.end() ? classIter->second : RegisterClass::GPR;
+	auto candidates =
+		graph.callLive.find(vreg) != graph.callLive.end() ? calleeSavedRegsFor(regClass) : allocatableRegsFor(regClass);
+	auto forbiddenIter = graph.forbiddenColors.find(vreg);
+	if (forbiddenIter == graph.forbiddenColors.end()) {
+		return candidates;
+	}
+
+	std::vector<PhysicalReg> filtered;
+	filtered.reserve(candidates.size());
+	for (PhysicalReg reg: candidates) {
+		if (forbiddenIter->second.find(reg) == forbiddenIter->second.end()) {
+			filtered.push_back(reg);
+		}
+	}
+	return filtered;
 }
 
 int32_t highestCurrentDegreeNode(const std::set<int32_t> & nodes, const std::map<int32_t, int> & degrees)
@@ -256,9 +357,7 @@ ColoringResult colorGraph(const InterferenceGraph & graph)
 		}
 
 		std::optional<PhysicalReg> selected;
-		auto classIter = graph.classes.find(node);
-		const RegisterClass regClass = classIter != graph.classes.end() ? classIter->second : RegisterClass::GPR;
-		for (PhysicalReg reg: allocatableRegsFor(regClass)) {
+		for (PhysicalReg reg: candidateRegsFor(node, graph)) {
 			if (used.find(reg) == used.end()) {
 				selected = reg;
 				break;
@@ -443,6 +542,130 @@ void applyAssignment(MachineFunction & function, const std::unordered_map<int32_
 	}
 }
 
+std::vector<PhysicalReg> usedCalleeSavedGPRs(const std::unordered_map<int32_t, PhysicalReg> & assignment)
+{
+	std::set<PhysicalReg> used;
+	for (const auto & entry: assignment) {
+		if (isCalleeSavedGPR(entry.second)) {
+			used.insert(entry.second);
+		}
+	}
+
+	std::vector<PhysicalReg> ordered;
+	for (PhysicalReg reg: calleeSavedGPRs) {
+		if (used.find(reg) != used.end()) {
+			ordered.push_back(reg);
+		}
+	}
+	return ordered;
+}
+
+bool isFramePointerSetup(const MachineInstr & inst)
+{
+	return inst.opcode == MachineOpcode::ADDI && inst.operands.size() >= 3 &&
+		   inst.operands[0].kind == MachineOperandKind::PhysicalReg &&
+		   inst.operands[1].kind == MachineOperandKind::PhysicalReg && inst.operands[0].preg == PhysicalReg::FP &&
+		   inst.operands[1].preg == PhysicalReg::SP;
+}
+
+bool isSavedReturnAddressLoad(const MachineInstr & inst)
+{
+	return inst.opcode == MachineOpcode::LD && inst.operands.size() >= 2 &&
+		   inst.operands[0].kind == MachineOperandKind::PhysicalReg && inst.operands[0].preg == PhysicalReg::RA &&
+		   inst.operands[1].kind == MachineOperandKind::Memory && inst.operands[1].memoryBaseIsPhysical &&
+		   inst.operands[1].memoryBasePreg == PhysicalReg::FP &&
+		   inst.operands[1].memoryOffset == FunctionFrameLayout::savedRaOffset;
+}
+
+bool isOldFramePointerLoad(const MachineInstr & inst)
+{
+	return inst.opcode == MachineOpcode::LD && inst.operands.size() >= 2 &&
+		   inst.operands[1].kind == MachineOperandKind::Memory && inst.operands[1].memoryBaseIsPhysical &&
+		   inst.operands[1].memoryBasePreg == PhysicalReg::FP &&
+		   inst.operands[1].memoryOffset == FunctionFrameLayout::savedFpOffset;
+}
+
+bool isEpilogueRestorePoint(const MachineInstr & inst)
+{
+	return isSavedReturnAddressLoad(inst) || isOldFramePointerLoad(inst);
+}
+
+std::map<PhysicalReg, int32_t> createCalleeSavedSlots(
+	FunctionFrameLayout & layout,
+	const std::vector<PhysicalReg> & regs)
+{
+	std::map<PhysicalReg, int32_t> slots;
+	for (PhysicalReg reg: regs) {
+		slots.emplace(reg, layout.createSpillSlot(8, 8));
+	}
+	return slots;
+}
+
+void insertCalleeSavedPrologue(MachineFunction & function, const std::map<PhysicalReg, int32_t> & slots)
+{
+	if (slots.empty() || function.blocks().empty()) {
+		return;
+	}
+
+	auto & instructions = function.blocks()[0].instructions();
+	auto insertPos = instructions.begin();
+	for (auto iter = instructions.begin(); iter != instructions.end(); ++iter) {
+		if (isFramePointerSetup(*iter)) {
+			insertPos = std::next(iter);
+			break;
+		}
+	}
+
+	std::vector<MachineInstr> saves;
+	saves.reserve(slots.size());
+	for (const auto & entry: slots) {
+		saves.push_back(MachineInstr::make(
+			MachineOpcode::SD,
+			{MachineOperand::pregUse(entry.first), MachineOperand::spillSlotOperand(entry.second)}));
+	}
+	instructions.insert(insertPos, saves.begin(), saves.end());
+}
+
+void insertCalleeSavedEpilogues(MachineFunction & function, const std::map<PhysicalReg, int32_t> & slots)
+{
+	if (slots.empty()) {
+		return;
+	}
+
+	std::vector<MachineInstr> restores;
+	restores.reserve(slots.size());
+	for (auto iter = slots.rbegin(); iter != slots.rend(); ++iter) {
+		restores.push_back(MachineInstr::make(
+			MachineOpcode::LD,
+			{MachineOperand::pregDef(iter->first), MachineOperand::spillSlotOperand(iter->second)}));
+	}
+
+	for (auto & block: function.blocks()) {
+		auto & instructions = block.instructions();
+		for (auto iter = instructions.begin(); iter != instructions.end(); ++iter) {
+			if (isEpilogueRestorePoint(*iter)) {
+				instructions.insert(iter, restores.begin(), restores.end());
+				break;
+			}
+		}
+	}
+}
+
+void preserveCalleeSavedRegisters(
+	MachineFunction & function,
+	FunctionFrameLayout & layout,
+	const std::unordered_map<int32_t, PhysicalReg> & assignment)
+{
+	const auto used = usedCalleeSavedGPRs(assignment);
+	if (used.empty()) {
+		return;
+	}
+
+	const auto slots = createCalleeSavedSlots(layout, used);
+	insertCalleeSavedPrologue(function, slots);
+	insertCalleeSavedEpilogues(function, slots);
+}
+
 bool verifyNoVirtualRegs(const MachineFunction & function)
 {
 	for (const auto & block: function.blocks()) {
@@ -509,6 +732,7 @@ bool GraphColoringRegisterAllocator::run(MachineFunction & function, FunctionFra
 		}
 
 		if (!frameFinalized) {
+			preserveCalleeSavedRegisters(function, layout, coloring.assignment);
 			rewriteFrameSetup(function, layout);
 			legalizer.run(function, false);
 			frameFinalized = true;

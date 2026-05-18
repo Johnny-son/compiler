@@ -449,6 +449,28 @@ const char * TargetRegisterInfo::name(PhysicalReg reg)
 			return "t5";
 		case PhysicalReg::T6:
 			return "t6";
+		case PhysicalReg::S1:
+			return "s1";
+		case PhysicalReg::S2:
+			return "s2";
+		case PhysicalReg::S3:
+			return "s3";
+		case PhysicalReg::S4:
+			return "s4";
+		case PhysicalReg::S5:
+			return "s5";
+		case PhysicalReg::S6:
+			return "s6";
+		case PhysicalReg::S7:
+			return "s7";
+		case PhysicalReg::S8:
+			return "s8";
+		case PhysicalReg::S9:
+			return "s9";
+		case PhysicalReg::S10:
+			return "s10";
+		case PhysicalReg::S11:
+			return "s11";
 		case PhysicalReg::FA0:
 			return "fa0";
 		case PhysicalReg::FA1:
