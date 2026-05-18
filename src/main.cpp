@@ -13,6 +13,7 @@
 #include "IRPassManager.h"
 #include "LICMPass.h"
 #include "LocalCSEPass.h"
+#include "LocalStoreForwardPass.h"
 #include "Mem2RegPass.h"
 #include "SimplifyCFGPass.h"
 #include "SingleStoreAllocaPass.h"
@@ -245,6 +246,8 @@ static int compile(string inputFile, string outputFile)
 			passManager.addPass<VerifyPass>();
 			passManager.addPass<LocalCSEPass>();
 			passManager.addPass<VerifyPass>();
+			passManager.addPass<LocalStoreForwardPass>();
+			passManager.addPass<VerifyPass>();
 			passManager.addPass<SimplifyCFGPass>();
 			passManager.addPass<VerifyPass>();
 			passManager.addPass<TrivialPhiPass>();
@@ -254,6 +257,8 @@ static int compile(string inputFile, string outputFile)
 			passManager.addPass<LICMPass>();
 			passManager.addPass<VerifyPass>();
 			passManager.addPass<LocalCSEPass>();
+			passManager.addPass<VerifyPass>();
+			passManager.addPass<LocalStoreForwardPass>();
 			passManager.addPass<VerifyPass>();
 			passManager.addPass<DCEPass>();
 			passManager.addPass<VerifyPass>();
