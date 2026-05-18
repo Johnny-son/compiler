@@ -1,16 +1,18 @@
-// Eliminate repeated pure expressions inside a single basic block.
+// Eliminate repeated pure expressions in dominator-scoped regions.
 
 #include "LocalCSEPass.h"
 
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "BasicBlock.h"
 #include "BinaryInst.h"
 #include "CastInst.h"
 #include "FCmpInst.h"
 #include "GetElementPtrInst.h"
+#include "IRCFG.h"
 #include "ICmpInst.h"
 #include "ZExtInst.h"
 #include "Function.h"
@@ -20,6 +22,8 @@
 #include "Value.h"
 
 namespace {
+
+using AvailableMap = std::unordered_map<std::string, Instruction *>;
 
 std::string valueKey(Value * value)
 {
@@ -67,14 +71,14 @@ std::string instructionKey(Instruction * inst)
 	return "";
 }
 
-bool runOnBlock(BasicBlock * block)
+bool runOnBlock(BasicBlock * block, const DominanceInfo & dominance, AvailableMap & available)
 {
 	if (block == nullptr) {
 		return false;
 	}
 
 	bool changed = false;
-	std::unordered_map<std::string, Instruction *> available;
+	std::vector<std::pair<std::string, Instruction *>> inserted;
 	auto & instructions = block->getInstructions();
 	for (auto iter = instructions.begin(); iter != instructions.end();) {
 		auto * inst = *iter;
@@ -87,6 +91,7 @@ bool runOnBlock(BasicBlock * block)
 		auto availableIter = available.find(key);
 		if (availableIter == available.end()) {
 			available.insert({key, inst});
+			inserted.push_back({key, inst});
 			++iter;
 			continue;
 		}
@@ -99,6 +104,20 @@ bool runOnBlock(BasicBlock * block)
 		delete inst;
 		changed = true;
 	}
+
+	auto childrenIter = dominance.dominatorTreeChildren.find(block);
+	if (childrenIter != dominance.dominatorTreeChildren.end()) {
+		for (auto * child: childrenIter->second) {
+			changed |= runOnBlock(child, dominance, available);
+		}
+	}
+
+	for (auto iter = inserted.rbegin(); iter != inserted.rend(); ++iter) {
+		auto availableIter = available.find(iter->first);
+		if (availableIter != available.end() && availableIter->second == iter->second) {
+			available.erase(availableIter);
+		}
+	}
 	return changed;
 }
 
@@ -108,11 +127,15 @@ bool runOnFunction(Function * function)
 		return false;
 	}
 
-	bool changed = false;
-	for (auto * block: function->getBasicBlocks()) {
-		changed |= runOnBlock(block);
+	auto * entry = function->getEntryBlock();
+	if (entry == nullptr) {
+		return false;
 	}
-	return changed;
+
+	IRCFG cfg = IRCFGBuilder::build(function);
+	DominanceInfo dominance = DominanceBuilder::build(cfg, entry);
+	AvailableMap available;
+	return runOnBlock(entry, dominance, available);
 }
 
 } // namespace
