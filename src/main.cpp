@@ -9,6 +9,8 @@
 #include "IRGenerator.h"
 #include "ConstantFoldPass.h"
 #include "DCEPass.h"
+#include "DLEPass.h"
+#include "DSEPass.h"
 #include "InlineSimpleFunctionPass.h"
 #include "IRPassManager.h"
 #include "LICMPass.h"
@@ -248,6 +250,10 @@ static int compile(string inputFile, string outputFile)
 			passManager.addPass<VerifyPass>();
 			passManager.addPass<LocalStoreForwardPass>();
 			passManager.addPass<VerifyPass>();
+			passManager.addPass<DLEPass>();
+			passManager.addPass<VerifyPass>();
+			passManager.addPass<DSEPass>();
+			passManager.addPass<VerifyPass>();
 			passManager.addPass<SimplifyCFGPass>();
 			passManager.addPass<VerifyPass>();
 			passManager.addPass<TrivialPhiPass>();
@@ -259,6 +265,10 @@ static int compile(string inputFile, string outputFile)
 			passManager.addPass<LocalCSEPass>();
 			passManager.addPass<VerifyPass>();
 			passManager.addPass<LocalStoreForwardPass>();
+			passManager.addPass<VerifyPass>();
+			passManager.addPass<DLEPass>();
+			passManager.addPass<VerifyPass>();
+			passManager.addPass<DSEPass>();
 			passManager.addPass<VerifyPass>();
 			passManager.addPass<DCEPass>();
 			passManager.addPass<VerifyPass>();
