@@ -120,6 +120,35 @@ bool isOnlyUsedByConditionalBranches(Instruction * inst)
 	return true;
 }
 
+bool blockContainsInstruction(BasicBlock * block, Instruction * inst)
+{
+	if (block == nullptr || inst == nullptr) {
+		return false;
+	}
+
+	for (auto * blockInst: block->getInstructions()) {
+		if (blockInst == inst) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool isOnlyUsedByLocalConditionalBranches(Instruction * inst, BasicBlock * block)
+{
+	if (!isOnlyUsedByConditionalBranches(inst)) {
+		return false;
+	}
+
+	for (auto * use: inst->getUseList()) {
+		auto * branch = dynamic_cast<BranchInst *>(use->getUser());
+		if (!blockContainsInstruction(block, branch)) {
+			return false;
+		}
+	}
+	return true;
+}
+
 } // namespace
 
 InstructionSelector::InstructionSelector(IRFunctionView function, const FunctionFrameLayout & layout)
@@ -172,7 +201,7 @@ void InstructionSelector::translateInst(const IRInstView & inst)
 			translateBinary(inst);
 			break;
 		case IRInstKind::ICmp:
-			if (isOnlyUsedByConditionalBranches(inst.raw())) {
+			if (isOnlyUsedByLocalConditionalBranches(inst.raw(), currentIRBlock)) {
 				break;
 			}
 			translateICmp(inst);
@@ -638,7 +667,8 @@ void InstructionSelector::translateBranch(const IRInstView & inst)
 	};
 
 	auto * cmpInst = dynamic_cast<ICmpInst *>(inst.operand(0).raw());
-	if (cmpInst != nullptr && cmpInst->getOperandsNum() == 2) {
+	const bool canFuseCmpBranch = blockContainsInstruction(currentIRBlock, cmpInst);
+	if (canFuseCmpBranch && cmpInst != nullptr && cmpInst->getOperandsNum() == 2) {
 		auto lhs = loadBranchOperand(IRValueView(cmpInst->getOperand(0)));
 		auto rhs = loadBranchOperand(IRValueView(cmpInst->getOperand(1)));
 		MachineOpcode branchOpcode = MachineOpcode::BNE;
