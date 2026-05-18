@@ -9,15 +9,19 @@
 #include "BasicBlock.h"
 #include "BinaryInst.h"
 #include "BranchInst.h"
+#include "CallInst.h"
 #include "CastInst.h"
 #include "FCmpInst.h"
 #include "GetElementPtrInst.h"
+#include "GlobalVariable.h"
 #include "IRCFG.h"
 #include "ICmpInst.h"
+#include "LoadInst.h"
 #include "ZExtInst.h"
 #include "Function.h"
 #include "Instruction.h"
 #include "Module.h"
+#include "StoreInst.h"
 
 namespace {
 
@@ -66,6 +70,54 @@ bool isHoistableInstruction(Instruction * inst)
 		   dynamic_cast<ZExtInst *>(inst) != nullptr;
 }
 
+bool loopContainsCall(const LoopInfo & loop)
+{
+	for (auto * block: loop.blocks) {
+		for (auto * inst: block->getInstructions()) {
+			if (dynamic_cast<CallInst *>(inst) != nullptr) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+bool functionStoresToGlobal(Function * function, GlobalVariable * global)
+{
+	if (function == nullptr || global == nullptr) {
+		return true;
+	}
+
+	for (auto * block: function->getBasicBlocks()) {
+		for (auto * inst: block->getInstructions()) {
+			auto * store = dynamic_cast<StoreInst *>(inst);
+			if (store != nullptr && store->getPointerOperand() == global) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+bool isHoistableGlobalLoad(Function * function, const LoopInfo & loop, LoadInst * inst)
+{
+	if (inst == nullptr || inst->getType() == nullptr) {
+		return false;
+	}
+	if (!inst->getType()->isInt32Type() && !inst->getType()->isFloatType()) {
+		return false;
+	}
+
+	auto * global = dynamic_cast<GlobalVariable *>(inst->getPointerOperand());
+	if (global == nullptr) {
+		return false;
+	}
+	if (loopContainsCall(loop) || functionStoresToGlobal(function, global)) {
+		return false;
+	}
+	return true;
+}
+
 bool isLoopInvariantOperand(
 	Value * value,
 	const LoopInfo & loop,
@@ -92,13 +144,19 @@ bool isLoopInvariantOperand(
 }
 
 bool isLoopInvariantInstruction(
+	Function * function,
 	Instruction * inst,
 	const LoopInfo & loop,
 	const IRCFG & cfg,
 	const DominanceInfo & dominance,
 	const InstSet & hoisted)
 {
-	if (!isHoistableInstruction(inst)) {
+	auto * load = dynamic_cast<LoadInst *>(inst);
+	if (load != nullptr) {
+		if (!isHoistableGlobalLoad(function, loop, load)) {
+			return false;
+		}
+	} else if (!isHoistableInstruction(inst)) {
 		return false;
 	}
 
@@ -255,7 +313,7 @@ bool runOnLoop(Function * function, const LoopInfo & loop)
 			auto & instructions = block->getInstructions();
 			for (auto iter = instructions.begin(); iter != instructions.end();) {
 				auto * inst = *iter;
-				if (!isLoopInvariantInstruction(inst, loop, cfg, dominance, hoisted)) {
+				if (!isLoopInvariantInstruction(function, inst, loop, cfg, dominance, hoisted)) {
 					++iter;
 					continue;
 				}
