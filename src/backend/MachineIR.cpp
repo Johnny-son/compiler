@@ -31,6 +31,10 @@ const char * opcodeName(MachineOpcode opcode)
 			return "remw";
 		case MachineOpcode::SLLI:
 			return "slli";
+		case MachineOpcode::AND:
+			return "and";
+		case MachineOpcode::OR:
+			return "or";
 		case MachineOpcode::XOR:
 			return "xor";
 		case MachineOpcode::SLT:

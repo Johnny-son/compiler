@@ -9,7 +9,16 @@
 #include "MachineIR.h"
 
 class BasicBlock;
+class Function;
 class Value;
+
+enum class RecognizedHelperKind {
+	None,
+	BitAnd,
+	BitOr,
+	BitXor,
+	BitNot,
+};
 
 class InstructionSelector {
 
@@ -33,6 +42,7 @@ private:
 	void translateCast(const IRInstView & inst);
 	void translateGEP(const IRInstView & inst);
 	void translateCall(const IRInstView & inst);
+	bool translateRecognizedHelperCall(const IRInstView & inst);
 	void translatePhi(const IRInstView & inst);
 	void translateBranch(const IRInstView & inst);
 	void translateReturn(const IRInstView & inst);
@@ -44,6 +54,7 @@ private:
 	void storeValue(const MachineOperand & src, const IRValueView & value);
 	[[nodiscard]] std::optional<MachineOperand> cachedValue(const IRValueView & value) const;
 	bool rememberValue(Value * value, const MachineOperand & operand);
+	RecognizedHelperKind classifyHelper(Function * callee);
 	[[nodiscard]] bool isLocalOnlyValue(const IRValueView & value) const;
 	[[nodiscard]] bool isDefinedInCurrentBlock(const IRValueView & value) const;
 	void storeZeroInitializer(const IRValueView & ptr, Type * valueType);
@@ -72,7 +83,9 @@ private:
 	std::unordered_set<Value *> localOnlyValues;
 	std::unordered_set<BasicBlock *> callBlocks;
 	std::unordered_map<Value *, MachineOperand> localValueCache;
+	std::unordered_map<Function *, RecognizedHelperKind> helperKindCache;
 	BasicBlock * currentIRBlock = nullptr;
 	bool localValueCacheEnabled = true;
+	bool localFprValueCacheEnabled = false;
 	int nextLabelIndex = 0;
 };

@@ -79,6 +79,8 @@ enum class MachineOpcode : std::int16_t {
 	DIVW,
 	REMW,
 	SLLI,
+	AND,
+	OR,
 	XOR,
 	SLT,
 	XORI,

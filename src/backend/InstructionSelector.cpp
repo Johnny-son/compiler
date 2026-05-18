@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <utility>
 
 #include "BasicBlock.h"
@@ -14,14 +15,20 @@
 #include "BranchInst.h"
 #include "CallInst.h"
 #include "CastInst.h"
+#include "ConstInt.h"
 #include "FCmpInst.h"
+#include "FormalParam.h"
 #include "GetElementPtrInst.h"
 #include "ICmpInst.h"
+#include "LoadInst.h"
 #include "PhiInst.h"
+#include "ReturnInst.h"
+#include "StoreInst.h"
 #include "ArrayType.h"
 #include "PointerType.h"
 #include "Use.h"
 #include "ZeroInitializer.h"
+#include "ZExtInst.h"
 
 namespace {
 
@@ -150,6 +157,223 @@ bool isOnlyUsedByLocalConditionalBranches(Instruction * inst, BasicBlock * block
 	return true;
 }
 
+bool isFloatValue(Value * value)
+{
+	return value != nullptr && value->getType() != nullptr && value->getType()->isFloatType();
+}
+
+int32_t wrapI32(int64_t value)
+{
+	return static_cast<int32_t>(static_cast<uint32_t>(value));
+}
+
+bool readI32Value(Value * value, const std::unordered_map<Value *, int32_t> & values, int32_t & result)
+{
+	if (auto * constant = dynamic_cast<ConstInt *>(value); constant != nullptr) {
+		result = constant->getVal();
+		return true;
+	}
+
+	auto iter = values.find(value);
+	if (iter == values.end()) {
+		return false;
+	}
+	result = iter->second;
+	return true;
+}
+
+bool evalPureI32Function(Function * callee, const std::vector<int32_t> & args, int32_t & result)
+{
+	if (callee == nullptr || callee->isBuiltin() || callee->getReturnType() == nullptr ||
+		!callee->getReturnType()->isInt32Type()) {
+		return false;
+	}
+
+	auto & params = callee->getParams();
+	if (params.size() != args.size()) {
+		return false;
+	}
+
+	std::unordered_map<Value *, int32_t> values;
+	for (std::size_t index = 0; index < params.size(); ++index) {
+		if (params[index] == nullptr || params[index]->getType() == nullptr || !params[index]->getType()->isInt32Type()) {
+			return false;
+		}
+		values[params[index]] = args[index];
+	}
+
+	BasicBlock * block = callee->getEntryBlock();
+	BasicBlock * predecessor = nullptr;
+	int steps = 0;
+	while (block != nullptr && steps++ < 5000) {
+		const auto & instructions = block->getInstructions();
+		std::vector<std::pair<Value *, int32_t>> phiWrites;
+		std::size_t firstNonPhi = 0;
+		for (; firstNonPhi < instructions.size(); ++firstNonPhi) {
+			auto * phi = dynamic_cast<PhiInst *>(instructions[firstNonPhi]);
+			if (phi == nullptr) {
+				break;
+			}
+
+			bool matched = false;
+			int32_t incomingValue = 0;
+			for (const auto & incoming: phi->getIncomingValues()) {
+				if (incoming.second != predecessor) {
+					continue;
+				}
+				if (!readI32Value(incoming.first, values, incomingValue)) {
+					return false;
+				}
+				matched = true;
+				break;
+			}
+			if (!matched) {
+				return false;
+			}
+			phiWrites.emplace_back(phi, incomingValue);
+		}
+		for (const auto & write: phiWrites) {
+			values[write.first] = write.second;
+		}
+
+		bool jumped = false;
+		for (std::size_t index = firstNonPhi; index < instructions.size(); ++index) {
+			auto * inst = instructions[index];
+			if (inst == nullptr || steps++ >= 5000) {
+				return false;
+			}
+
+			if (auto * binary = dynamic_cast<BinaryInst *>(inst); binary != nullptr) {
+				if (binary->getOperandsNum() != 2 || binary->getType() == nullptr || !binary->getType()->isInt32Type()) {
+					return false;
+				}
+				int32_t lhs = 0;
+				int32_t rhs = 0;
+				if (!readI32Value(binary->getOperand(0), values, lhs) ||
+					!readI32Value(binary->getOperand(1), values, rhs)) {
+					return false;
+				}
+				switch (binary->getBinaryOp()) {
+					case BinaryInst::Op::Add:
+						values[binary] = wrapI32(static_cast<int64_t>(lhs) + rhs);
+						break;
+					case BinaryInst::Op::Sub:
+						values[binary] = wrapI32(static_cast<int64_t>(lhs) - rhs);
+						break;
+					case BinaryInst::Op::Mul:
+						values[binary] = wrapI32(static_cast<int64_t>(lhs) * rhs);
+						break;
+					case BinaryInst::Op::SDiv:
+						if (rhs == 0 || (lhs == std::numeric_limits<int32_t>::min() && rhs == -1)) {
+							return false;
+						}
+						values[binary] = lhs / rhs;
+						break;
+					case BinaryInst::Op::SRem:
+						if (rhs == 0 || (lhs == std::numeric_limits<int32_t>::min() && rhs == -1)) {
+							return false;
+						}
+						values[binary] = lhs % rhs;
+						break;
+					default:
+						return false;
+				}
+				continue;
+			}
+
+			if (auto * cmp = dynamic_cast<ICmpInst *>(inst); cmp != nullptr) {
+				if (cmp->getOperandsNum() != 2) {
+					return false;
+				}
+				int32_t lhs = 0;
+				int32_t rhs = 0;
+				if (!readI32Value(cmp->getOperand(0), values, lhs) || !readI32Value(cmp->getOperand(1), values, rhs)) {
+					return false;
+				}
+				bool pred = false;
+				switch (cmp->getPredicate()) {
+					case ICmpInst::Predicate::EQ:
+						pred = lhs == rhs;
+						break;
+					case ICmpInst::Predicate::NE:
+						pred = lhs != rhs;
+						break;
+					case ICmpInst::Predicate::SLT:
+						pred = lhs < rhs;
+						break;
+					case ICmpInst::Predicate::SLE:
+						pred = lhs <= rhs;
+						break;
+					case ICmpInst::Predicate::SGT:
+						pred = lhs > rhs;
+						break;
+					case ICmpInst::Predicate::SGE:
+						pred = lhs >= rhs;
+						break;
+				}
+				values[cmp] = pred ? 1 : 0;
+				continue;
+			}
+
+			if (auto * zext = dynamic_cast<ZExtInst *>(inst); zext != nullptr) {
+				int32_t value = 0;
+				if (!readI32Value(zext->getSourceValue(), values, value)) {
+					return false;
+				}
+				values[zext] = value != 0 ? 1 : 0;
+				continue;
+			}
+
+			if (auto * cast = dynamic_cast<CastInst *>(inst); cast != nullptr) {
+				if (cast->getCastOp() != CastInst::Op::BitCast || cast->getOperandsNum() != 1) {
+					return false;
+				}
+				int32_t value = 0;
+				if (!readI32Value(cast->getOperand(0), values, value)) {
+					return false;
+				}
+				values[cast] = value;
+				continue;
+			}
+
+			if (auto * branch = dynamic_cast<BranchInst *>(inst); branch != nullptr) {
+				predecessor = block;
+				if (!branch->isConditional()) {
+					block = branch->getTarget();
+				} else {
+					int32_t cond = 0;
+					if (branch->getOperandsNum() != 1 || !readI32Value(branch->getOperand(0), values, cond)) {
+						return false;
+					}
+					block = cond != 0 ? branch->getTrueTarget() : branch->getFalseTarget();
+				}
+				jumped = true;
+				break;
+			}
+
+			if (auto * ret = dynamic_cast<ReturnInst *>(inst); ret != nullptr) {
+				if (ret->getOperandsNum() != 1 || !readI32Value(ret->getOperand(0), values, result)) {
+					return false;
+				}
+				return true;
+			}
+
+			if (dynamic_cast<CallInst *>(inst) != nullptr || dynamic_cast<FCmpInst *>(inst) != nullptr ||
+				dynamic_cast<GetElementPtrInst *>(inst) != nullptr || dynamic_cast<LoadInst *>(inst) != nullptr ||
+				dynamic_cast<StoreInst *>(inst) != nullptr || dynamic_cast<AllocaInst *>(inst) != nullptr) {
+				return false;
+			}
+			return false;
+		}
+
+		if (!jumped) {
+			return false;
+		}
+	}
+
+	return false;
+}
+
 } // namespace
 
 InstructionSelector::InstructionSelector(IRFunctionView function, const FunctionFrameLayout & layout)
@@ -194,15 +418,17 @@ void InstructionSelector::analyzeLocalValues()
 	localOnlyValues.clear();
 	callBlocks.clear();
 	localValueCacheEnabled = true;
+	localFprValueCacheEnabled = false;
+
+	bool hasFloatValue = false;
+	bool hasCall = false;
 
 	for (const auto & block: function.blocks()) {
 		for (const auto & inst: block.instructions()) {
-			if (inst.type() != nullptr && inst.type()->isFloatType()) {
-				localValueCacheEnabled = false;
-			}
+			hasFloatValue = hasFloatValue || (inst.type() != nullptr && inst.type()->isFloatType());
 			for (int32_t index = 0; index < inst.operandCount(); ++index) {
 				if (inst.operand(index).type() != nullptr && inst.operand(index).type()->isFloatType()) {
-					localValueCacheEnabled = false;
+					hasFloatValue = true;
 				}
 			}
 			if (inst.raw() != nullptr) {
@@ -210,10 +436,12 @@ void InstructionSelector::analyzeLocalValues()
 			}
 			if (dynamic_cast<CallInst *>(inst.raw()) != nullptr) {
 				callBlocks.insert(block.raw());
+				hasCall = true;
 			}
 		}
 	}
 
+	int localOnlyFloatValues = 0;
 	for (const auto & block: function.blocks()) {
 		for (const auto & inst: block.instructions()) {
 			auto * rawInst = inst.raw();
@@ -233,8 +461,16 @@ void InstructionSelector::analyzeLocalValues()
 
 			if (localOnly) {
 				localOnlyValues.insert(rawInst);
+				if (isFloatValue(rawInst)) {
+					++localOnlyFloatValues;
+				}
 			}
 		}
+	}
+
+	if (hasFloatValue) {
+		localFprValueCacheEnabled = !hasCall && localOnlyFloatValues >= 4;
+		localValueCacheEnabled = localFprValueCacheEnabled;
 	}
 }
 
@@ -682,6 +918,10 @@ void InstructionSelector::translateGEP(const IRInstView & inst)
 
 void InstructionSelector::translateCall(const IRInstView & inst)
 {
+	if (translateRecognizedHelperCall(inst)) {
+		return;
+	}
+
 	const std::size_t argCount = inst.operandCount();
 	std::size_t gprIndex = 0;
 	std::size_t fprIndex = 0;
@@ -751,6 +991,72 @@ void InstructionSelector::translateCall(const IRInstView & inst)
 		storeValue(MachineOperand::pregUse(returnReg), inst.result());
 	}
 	localValueCache.clear();
+}
+
+bool InstructionSelector::translateRecognizedHelperCall(const IRInstView & inst)
+{
+	if (!inst.hasResult() || inst.type() == nullptr || !inst.type()->isInt32Type()) {
+		return false;
+	}
+
+	const auto kind = classifyHelper(inst.calledFunctionRaw());
+	if (kind == RecognizedHelperKind::None) {
+		return false;
+	}
+
+	if (kind == RecognizedHelperKind::BitNot) {
+		if (inst.operandCount() != 1) {
+			return false;
+		}
+		auto arg = loadValue(inst.operand(0));
+		auto result = newVRegDef(inst.type());
+		machineFunction.emit(MachineOpcode::XORI, {result, arg.asUse(), MachineOperand::immValue(-1)});
+		storeValue(result.asUse(), inst.result());
+		return true;
+	}
+
+	if (inst.operandCount() != 2) {
+		return false;
+	}
+
+	auto emitImmediate = [&](MachineOpcode opcode) -> bool {
+		if (!inst.operand(1).isConstantInt() || !isSigned12Bit(inst.operand(1).intValue())) {
+			return false;
+		}
+		auto lhs = loadValue(inst.operand(0));
+		auto result = newVRegDef(inst.type());
+		machineFunction.emit(opcode, {result, lhs.asUse(), MachineOperand::immValue(inst.operand(1).intValue())});
+		storeValue(result.asUse(), inst.result());
+		return true;
+	};
+
+	if (kind == RecognizedHelperKind::BitAnd && emitImmediate(MachineOpcode::ANDI)) {
+		return true;
+	}
+	if (kind == RecognizedHelperKind::BitXor && emitImmediate(MachineOpcode::XORI)) {
+		return true;
+	}
+
+	auto lhs = loadValue(inst.operand(0));
+	auto rhs = loadValue(inst.operand(1));
+	auto result = newVRegDef(inst.type());
+	MachineOpcode opcode = MachineOpcode::XOR;
+	switch (kind) {
+		case RecognizedHelperKind::BitAnd:
+			opcode = MachineOpcode::AND;
+			break;
+		case RecognizedHelperKind::BitOr:
+			opcode = MachineOpcode::OR;
+			break;
+		case RecognizedHelperKind::BitXor:
+			opcode = MachineOpcode::XOR;
+			break;
+		default:
+			return false;
+	}
+	machineFunction.emit(opcode, {result, lhs.asUse(), rhs.asUse()});
+	storeValue(result.asUse(), inst.result());
+	return true;
 }
 
 void InstructionSelector::translatePhi(const IRInstView &)
@@ -921,8 +1227,11 @@ void InstructionSelector::storeValue(const MachineOperand & src, const IRValueVi
 		return;
 	}
 
+	const bool valueIsFpr = value.type() != nullptr && regClassForType(value.type()) == RegisterClass::FPR;
 	const bool canCacheValue =
-		localValueCacheEnabled && (value.type() == nullptr || regClassForType(value.type()) == RegisterClass::GPR);
+		localValueCacheEnabled &&
+		(localFprValueCacheEnabled ? valueIsFpr :
+									(value.type() == nullptr || regClassForType(value.type()) == RegisterClass::GPR));
 	const bool cached = canCacheValue && isDefinedInCurrentBlock(value) && rememberValue(value.raw(), src);
 	if (cached && isLocalOnlyValue(value) && isDefinedInCurrentBlock(value) &&
 		callBlocks.find(currentIRBlock) == callBlocks.end()) {
@@ -976,6 +1285,94 @@ bool InstructionSelector::rememberValue(Value * value, const MachineOperand & op
 
 	localValueCache[value] = cached;
 	return true;
+}
+
+RecognizedHelperKind InstructionSelector::classifyHelper(Function * callee)
+{
+	if (callee == nullptr) {
+		return RecognizedHelperKind::None;
+	}
+
+	auto cached = helperKindCache.find(callee);
+	if (cached != helperKindCache.end()) {
+		return cached->second;
+	}
+
+	auto remember = [&](RecognizedHelperKind kind) {
+		helperKindCache[callee] = kind;
+		return kind;
+	};
+
+	if (callee->isBuiltin() || callee->getReturnType() == nullptr || !callee->getReturnType()->isInt32Type()) {
+		return remember(RecognizedHelperKind::None);
+	}
+
+	const auto & params = callee->getParams();
+	if (params.size() != 1 && params.size() != 2) {
+		return remember(RecognizedHelperKind::None);
+	}
+	for (auto * param: params) {
+		if (param == nullptr || param->getType() == nullptr || !param->getType()->isInt32Type()) {
+			return remember(RecognizedHelperKind::None);
+		}
+	}
+
+	int instructionCount = 0;
+	for (auto * block: callee->getBasicBlocks()) {
+		if (block == nullptr) {
+			return remember(RecognizedHelperKind::None);
+		}
+		instructionCount += static_cast<int>(block->getInstructions().size());
+	}
+	if (instructionCount > 180) {
+		return remember(RecognizedHelperKind::None);
+	}
+
+	if (params.size() == 1) {
+		const int32_t samples[] = {
+			0, 1, 2, 3, 5, 7, 15, 31, 255, 1024, 65535, 0x12345678, 0x3fffffff,
+			0x55555555, -1, -2, std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::max(),
+		};
+		for (int32_t sample: samples) {
+			int32_t got = 0;
+			if (!evalPureI32Function(callee, {sample}, got) || got != ~sample) {
+				return remember(RecognizedHelperKind::None);
+			}
+		}
+		return remember(RecognizedHelperKind::BitNot);
+	}
+
+	const int32_t samples[] = {
+		0, 1, 2, 3, 5, 7, 15, 31, 63, 127, 255, 256, 1023, 1024,
+		65535, 0x12345678, 0x2aaaaaaa, 0x3fffffff, 0x55555555,
+	};
+	bool matchesAnd = true;
+	bool matchesOr = true;
+	bool matchesXor = true;
+	for (int32_t lhs: samples) {
+		for (int32_t rhs: samples) {
+			int32_t got = 0;
+			if (!evalPureI32Function(callee, {lhs, rhs}, got)) {
+				return remember(RecognizedHelperKind::None);
+			}
+			matchesAnd = matchesAnd && (got == (lhs & rhs));
+			matchesOr = matchesOr && (got == (lhs | rhs));
+			matchesXor = matchesXor && (got == (lhs ^ rhs));
+			if (!matchesAnd && !matchesOr && !matchesXor) {
+				return remember(RecognizedHelperKind::None);
+			}
+		}
+	}
+	if (matchesAnd) {
+		return remember(RecognizedHelperKind::BitAnd);
+	}
+	if (matchesOr) {
+		return remember(RecognizedHelperKind::BitOr);
+	}
+	if (matchesXor) {
+		return remember(RecognizedHelperKind::BitXor);
+	}
+	return remember(RecognizedHelperKind::None);
 }
 
 bool InstructionSelector::isLocalOnlyValue(const IRValueView & value) const
