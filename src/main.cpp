@@ -9,6 +9,7 @@
 #include "IRGenerator.h"
 #include "ConstantFoldPass.h"
 #include "DCEPass.h"
+#include "InlineSimpleFunctionPass.h"
 #include "IRPassManager.h"
 #include "LICMPass.h"
 #include "Mem2RegPass.h"
@@ -233,6 +234,8 @@ static int compile(string inputFile, string outputFile)
 			passManager.addPass<SimplifyCFGPass>();
 			passManager.addPass<VerifyPass>();
 			passManager.addPass<Mem2RegPass>();
+			passManager.addPass<VerifyPass>();
+			passManager.addPass<InlineSimpleFunctionPass>();
 			passManager.addPass<VerifyPass>();
 			passManager.addPass<ConstantFoldPass>();
 			passManager.addPass<VerifyPass>();
