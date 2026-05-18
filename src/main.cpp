@@ -12,6 +12,7 @@
 #include "InlineSimpleFunctionPass.h"
 #include "IRPassManager.h"
 #include "LICMPass.h"
+#include "LocalCSEPass.h"
 #include "Mem2RegPass.h"
 #include "SimplifyCFGPass.h"
 #include "TrivialPhiPass.h"
@@ -239,6 +240,8 @@ static int compile(string inputFile, string outputFile)
 			passManager.addPass<VerifyPass>();
 			passManager.addPass<ConstantFoldPass>();
 			passManager.addPass<VerifyPass>();
+			passManager.addPass<LocalCSEPass>();
+			passManager.addPass<VerifyPass>();
 			passManager.addPass<SimplifyCFGPass>();
 			passManager.addPass<VerifyPass>();
 			passManager.addPass<TrivialPhiPass>();
@@ -246,6 +249,8 @@ static int compile(string inputFile, string outputFile)
 			passManager.addPass<SimplifyCFGPass>();
 			passManager.addPass<VerifyPass>();
 			passManager.addPass<LICMPass>();
+			passManager.addPass<VerifyPass>();
+			passManager.addPass<LocalCSEPass>();
 			passManager.addPass<VerifyPass>();
 			passManager.addPass<DCEPass>();
 			passManager.addPass<VerifyPass>();
