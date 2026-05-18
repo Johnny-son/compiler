@@ -8,7 +8,9 @@
 #include "BasicBlock.h"
 #include "BinaryInst.h"
 #include "FCmpInst.h"
+#include "GlobalVariable.h"
 #include "ICmpInst.h"
+#include "LoadInst.h"
 #include "ZExtInst.h"
 #include "ConstFloat.h"
 #include "ConstInt.h"
@@ -207,8 +209,33 @@ Value * foldZExt(Module & module, ZExtInst * inst, ConstInt * source)
 	return nullptr;
 }
 
+Value * foldConstGlobalLoad(Module & module, LoadInst * inst)
+{
+	if (inst == nullptr || inst->getOperandsNum() != 1) {
+		return nullptr;
+	}
+
+	auto * global = dynamic_cast<GlobalVariable *>(inst->getPointerOperand());
+	if (global == nullptr || !global->isConstValue()) {
+		return nullptr;
+	}
+
+	if (inst->getType() != nullptr && inst->getType()->isInt32Type() && global->hasConstIntValue()) {
+		return module.newConstInt(global->getConstIntValue());
+	}
+	if (inst->getType() != nullptr && inst->getType()->isFloatType() && global->hasConstFloatValue()) {
+		return module.newConstFloat(global->getConstFloatValue());
+	}
+	return nullptr;
+}
+
 Value * foldInstruction(Module & module, Instruction * inst)
 {
+	auto * load = dynamic_cast<LoadInst *>(inst);
+	if (load != nullptr) {
+		return foldConstGlobalLoad(module, load);
+	}
+
 	auto * binary = dynamic_cast<BinaryInst *>(inst);
 	if (binary != nullptr && binary->getOperandsNum() == 2) {
 		auto * lhs = binary->getOperand(0);
