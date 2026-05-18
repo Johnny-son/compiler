@@ -155,6 +155,8 @@ std::string MachineAsmLowering::opcodeName(MachineOpcode opcode) const
 			return "divw";
 		case MachineOpcode::REMW:
 			return "remw";
+		case MachineOpcode::SLLI:
+			return "slli";
 		case MachineOpcode::XOR:
 			return "xor";
 		case MachineOpcode::SLT:

@@ -83,6 +83,21 @@ std::string asmSymbolFromIRName(const std::string & irName, const std::string & 
 	return !symbol.empty() && symbol.front() == '@' ? symbol.substr(1) : symbol;
 }
 
+bool isPowerOfTwo(int32_t value)
+{
+	return value > 0 && (value & (value - 1)) == 0;
+}
+
+int32_t log2Int(int32_t value)
+{
+	int32_t shift = 0;
+	while (value > 1) {
+		value >>= 1;
+		++shift;
+	}
+	return shift;
+}
+
 } // namespace
 
 InstructionSelector::InstructionSelector(IRFunctionView function, const FunctionFrameLayout & layout)
@@ -438,9 +453,17 @@ void InstructionSelector::translateGEP(const IRInstView & inst)
 		}
 
 		auto indexReg = loadValue(indexValue);
-		auto scaleReg = newVRegDef();
-		machineFunction.emit(MachineOpcode::LI, {scaleReg, MachineOperand::immValue(scale)});
-		machineFunction.emit(MachineOpcode::MUL, {indexReg.asDef(), indexReg.asUse(), scaleReg.asUse()});
+		if (scale != 1) {
+			if (isPowerOfTwo(scale)) {
+				machineFunction.emit(
+					MachineOpcode::SLLI,
+					{indexReg.asDef(), indexReg.asUse(), MachineOperand::immValue(log2Int(scale))});
+			} else {
+				auto scaleReg = newVRegDef();
+				machineFunction.emit(MachineOpcode::LI, {scaleReg, MachineOperand::immValue(scale)});
+				machineFunction.emit(MachineOpcode::MUL, {indexReg.asDef(), indexReg.asUse(), scaleReg.asUse()});
+			}
+		}
 		machineFunction.emit(MachineOpcode::ADD, {address.asDef(), address.asUse(), indexReg.asUse()});
 	}
 

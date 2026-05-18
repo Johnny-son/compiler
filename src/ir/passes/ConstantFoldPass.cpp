@@ -74,6 +74,61 @@ Value * foldFloatBinary(Module & module, BinaryInst * inst, ConstFloat * lhs, Co
 	return nullptr;
 }
 
+bool isConstIntValue(Value * value, int32_t expected)
+{
+	auto * constInt = dynamic_cast<ConstInt *>(value);
+	return constInt != nullptr && constInt->getVal() == expected;
+}
+
+Value * foldIntegerIdentity(Module & module, BinaryInst * inst, Value * lhs, Value * rhs)
+{
+	switch (inst->getBinaryOp()) {
+		case BinaryInst::Op::Add:
+			if (isConstIntValue(lhs, 0)) {
+				return rhs;
+			}
+			if (isConstIntValue(rhs, 0)) {
+				return lhs;
+			}
+			break;
+		case BinaryInst::Op::Sub:
+			if (isConstIntValue(rhs, 0)) {
+				return lhs;
+			}
+			if (lhs == rhs) {
+				return module.newConstInt(0);
+			}
+			break;
+		case BinaryInst::Op::Mul:
+			if (isConstIntValue(lhs, 0) || isConstIntValue(rhs, 0)) {
+				return module.newConstInt(0);
+			}
+			if (isConstIntValue(lhs, 1)) {
+				return rhs;
+			}
+			if (isConstIntValue(rhs, 1)) {
+				return lhs;
+			}
+			break;
+		case BinaryInst::Op::SDiv:
+			if (isConstIntValue(rhs, 1)) {
+				return lhs;
+			}
+			break;
+		case BinaryInst::Op::SRem:
+			if (isConstIntValue(rhs, 1)) {
+				return module.newConstInt(0);
+			}
+			break;
+		case BinaryInst::Op::FAdd:
+		case BinaryInst::Op::FSub:
+		case BinaryInst::Op::FMul:
+		case BinaryInst::Op::FDiv:
+			break;
+	}
+	return nullptr;
+}
+
 Value * foldIntegerCompare(Module & module, ICmpInst * inst, ConstInt * lhs, ConstInt * rhs)
 {
 	const int32_t left = lhs->getVal();
@@ -92,6 +147,25 @@ Value * foldIntegerCompare(Module & module, ICmpInst * inst, ConstInt * lhs, Con
 			return module.newConstBool(left > right);
 		case ICmpInst::Predicate::SGE:
 			return module.newConstBool(left >= right);
+	}
+	return nullptr;
+}
+
+Value * foldIntegerCompareIdentity(Module & module, ICmpInst * inst, Value * lhs, Value * rhs)
+{
+	if (lhs != rhs) {
+		return nullptr;
+	}
+
+	switch (inst->getPredicate()) {
+		case ICmpInst::Predicate::EQ:
+		case ICmpInst::Predicate::SLE:
+		case ICmpInst::Predicate::SGE:
+			return module.newConstBool(true);
+		case ICmpInst::Predicate::NE:
+		case ICmpInst::Predicate::SLT:
+		case ICmpInst::Predicate::SGT:
+			return module.newConstBool(false);
 	}
 	return nullptr;
 }
@@ -139,21 +213,33 @@ Value * foldInstruction(Module & module, Instruction * inst)
 	if (binary != nullptr && binary->getOperandsNum() == 2) {
 		auto * lhs = binary->getOperand(0);
 		auto * rhs = binary->getOperand(1);
-		if (auto * lhsInt = dynamic_cast<ConstInt *>(lhs); lhsInt != nullptr) {
-			auto * rhsInt = dynamic_cast<ConstInt *>(rhs);
-			return rhsInt == nullptr ? nullptr : foldIntegerBinary(module, binary, lhsInt, rhsInt);
+		auto * lhsInt = dynamic_cast<ConstInt *>(lhs);
+		auto * rhsInt = dynamic_cast<ConstInt *>(rhs);
+		if (lhsInt != nullptr && rhsInt != nullptr) {
+			return foldIntegerBinary(module, binary, lhsInt, rhsInt);
 		}
-		if (auto * lhsFloat = dynamic_cast<ConstFloat *>(lhs); lhsFloat != nullptr) {
-			auto * rhsFloat = dynamic_cast<ConstFloat *>(rhs);
-			return rhsFloat == nullptr ? nullptr : foldFloatBinary(module, binary, lhsFloat, rhsFloat);
+
+		if (auto * replacement = foldIntegerIdentity(module, binary, lhs, rhs); replacement != nullptr) {
+			return replacement;
+		}
+
+		auto * lhsFloat = dynamic_cast<ConstFloat *>(lhs);
+		auto * rhsFloat = dynamic_cast<ConstFloat *>(rhs);
+		if (lhsFloat != nullptr && rhsFloat != nullptr) {
+			return foldFloatBinary(module, binary, lhsFloat, rhsFloat);
 		}
 	}
 
 	auto * icmp = dynamic_cast<ICmpInst *>(inst);
 	if (icmp != nullptr && icmp->getOperandsNum() == 2) {
-		auto * lhsInt = dynamic_cast<ConstInt *>(icmp->getOperand(0));
-		auto * rhsInt = dynamic_cast<ConstInt *>(icmp->getOperand(1));
-		return lhsInt == nullptr || rhsInt == nullptr ? nullptr : foldIntegerCompare(module, icmp, lhsInt, rhsInt);
+		auto * lhs = icmp->getOperand(0);
+		auto * rhs = icmp->getOperand(1);
+		auto * lhsInt = dynamic_cast<ConstInt *>(lhs);
+		auto * rhsInt = dynamic_cast<ConstInt *>(rhs);
+		if (lhsInt != nullptr && rhsInt != nullptr) {
+			return foldIntegerCompare(module, icmp, lhsInt, rhsInt);
+		}
+		return foldIntegerCompareIdentity(module, icmp, lhs, rhs);
 	}
 
 	auto * fcmp = dynamic_cast<FCmpInst *>(inst);
