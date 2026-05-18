@@ -28,7 +28,11 @@ AsmFunction MachineAsmLowering::run() const
 		firstBlock = false;
 
 		for (const auto & inst: block.instructions()) {
-			asmFunction.emit(lowerInstruction(inst));
+			auto lowered = lowerInstruction(inst);
+			if (!lowered.isLabel && lowered.opcode.empty()) {
+				continue;
+			}
+			asmFunction.emit(lowered);
 		}
 	}
 
@@ -40,6 +44,9 @@ AsmInstruction MachineAsmLowering::lowerInstruction(const MachineInstr & inst) c
 	if (inst.opcode == MachineOpcode::COPY) {
 		const auto dst = lowerOperand(inst.operands[0]);
 		const auto src = lowerOperand(inst.operands[1]);
+		if (dst.kind == AsmOperandKind::Register && src.kind == AsmOperandKind::Register && dst.text == src.text) {
+			return {};
+		}
 		if (dst.kind == AsmOperandKind::Register && src.kind == AsmOperandKind::Register &&
 			(isFPRName(dst.text) || isFPRName(src.text))) {
 			return AsmInstruction::makeOp("fmv.s", {dst, src});
