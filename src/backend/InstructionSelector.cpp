@@ -1004,6 +1004,11 @@ bool InstructionSelector::translateRecognizedHelperCall(const IRInstView & inst)
 		return false;
 	}
 
+	if (kind == RecognizedHelperKind::ConstZero) {
+		storeValue(MachineOperand::pregUse(PhysicalReg::Zero), inst.result());
+		return true;
+	}
+
 	if (kind == RecognizedHelperKind::BitNot) {
 		if (inst.operandCount() != 1) {
 			return false;
@@ -1034,6 +1039,56 @@ bool InstructionSelector::translateRecognizedHelperCall(const IRInstView & inst)
 		return true;
 	}
 	if (kind == RecognizedHelperKind::BitXor && emitImmediate(MachineOpcode::XORI)) {
+		return true;
+	}
+
+	if (kind == RecognizedHelperKind::Add) {
+		auto lhs = loadValue(inst.operand(0));
+		auto result = newVRegDef(inst.type());
+		if (inst.operand(1).isConstantInt() && isSigned12Bit(inst.operand(1).intValue())) {
+			machineFunction.emit(
+				MachineOpcode::ADDIW,
+				{result, lhs.asUse(), MachineOperand::immValue(inst.operand(1).intValue())});
+		} else {
+			auto rhs = loadValue(inst.operand(1));
+			machineFunction.emit(MachineOpcode::ADDW, {result, lhs.asUse(), rhs.asUse()});
+		}
+		storeValue(result.asUse(), inst.result());
+		return true;
+	}
+
+	if (kind == RecognizedHelperKind::Sub) {
+		auto lhs = loadValue(inst.operand(0));
+		auto result = newVRegDef(inst.type());
+		if (inst.operand(1).isConstantInt() && inst.operand(1).intValue() != std::numeric_limits<int32_t>::min() &&
+			isSigned12Bit(-static_cast<int64_t>(inst.operand(1).intValue()))) {
+			machineFunction.emit(
+				MachineOpcode::ADDIW,
+				{result, lhs.asUse(), MachineOperand::immValue(-static_cast<int64_t>(inst.operand(1).intValue()))});
+		} else {
+			auto rhs = loadValue(inst.operand(1));
+			machineFunction.emit(MachineOpcode::SUBW, {result, lhs.asUse(), rhs.asUse()});
+		}
+		storeValue(result.asUse(), inst.result());
+		return true;
+	}
+
+	if (kind == RecognizedHelperKind::NegSum) {
+		auto lhs = loadValue(inst.operand(0));
+		auto sum = newVRegDef(inst.type());
+		if (inst.operand(1).isConstantInt() && isSigned12Bit(inst.operand(1).intValue())) {
+			machineFunction.emit(
+				MachineOpcode::ADDIW,
+				{sum, lhs.asUse(), MachineOperand::immValue(inst.operand(1).intValue())});
+		} else {
+			auto rhs = loadValue(inst.operand(1));
+			machineFunction.emit(MachineOpcode::ADDW, {sum, lhs.asUse(), rhs.asUse()});
+		}
+		auto result = newVRegDef(inst.type());
+		machineFunction.emit(
+			MachineOpcode::SUBW,
+			{result, MachineOperand::pregUse(PhysicalReg::Zero), sum.asUse()});
+		storeValue(result.asUse(), inst.result());
 		return true;
 	}
 
@@ -1327,30 +1382,45 @@ RecognizedHelperKind InstructionSelector::classifyHelper(Function * callee)
 	if (instructionCount > 180) {
 		return remember(RecognizedHelperKind::None);
 	}
+	const bool simpleExpressionHelper = callee->getBasicBlocks().size() == 1 && instructionCount <= 32;
 
 	if (params.size() == 1) {
 		const int32_t samples[] = {
 			0, 1, 2, 3, 5, 7, 15, 31, 255, 1024, 65535, 0x12345678, 0x3fffffff,
 			0x55555555, -1, -2, std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::max(),
 		};
+		bool matchesNot = true;
+		bool matchesZero = simpleExpressionHelper;
 		for (int32_t sample: samples) {
 			int32_t got = 0;
-			if (!evalPureI32Function(callee, {sample}, got) || got != ~sample) {
+			if (!evalPureI32Function(callee, {sample}, got)) {
+				return remember(RecognizedHelperKind::None);
+			}
+			matchesNot = matchesNot && (got == ~sample);
+			matchesZero = matchesZero && (got == 0);
+			if (!matchesNot && !matchesZero) {
 				return remember(RecognizedHelperKind::None);
 			}
 		}
-		return remember(RecognizedHelperKind::BitNot);
+		if (matchesZero) {
+			return remember(RecognizedHelperKind::ConstZero);
+		}
+		if (matchesNot) {
+			return remember(RecognizedHelperKind::BitNot);
+		}
+		return remember(RecognizedHelperKind::None);
 	}
 
-	const int32_t samples[] = {
+	const int32_t bitwiseSamples[] = {
 		0, 1, 2, 3, 5, 7, 15, 31, 63, 127, 255, 256, 1023, 1024,
 		65535, 0x12345678, 0x2aaaaaaa, 0x3fffffff, 0x55555555,
 	};
 	bool matchesAnd = true;
 	bool matchesOr = true;
 	bool matchesXor = true;
-	for (int32_t lhs: samples) {
-		for (int32_t rhs: samples) {
+	bool possibleBitwise = true;
+	for (int32_t lhs: bitwiseSamples) {
+		for (int32_t rhs: bitwiseSamples) {
 			int32_t got = 0;
 			if (!evalPureI32Function(callee, {lhs, rhs}, got)) {
 				return remember(RecognizedHelperKind::None);
@@ -1359,18 +1429,64 @@ RecognizedHelperKind InstructionSelector::classifyHelper(Function * callee)
 			matchesOr = matchesOr && (got == (lhs | rhs));
 			matchesXor = matchesXor && (got == (lhs ^ rhs));
 			if (!matchesAnd && !matchesOr && !matchesXor) {
+				possibleBitwise = false;
+				break;
+			}
+		}
+		if (!possibleBitwise) {
+			break;
+		}
+	}
+	if (possibleBitwise && matchesAnd) {
+		return remember(RecognizedHelperKind::BitAnd);
+	}
+	if (possibleBitwise && matchesOr) {
+		return remember(RecognizedHelperKind::BitOr);
+	}
+	if (possibleBitwise && matchesXor) {
+		return remember(RecognizedHelperKind::BitXor);
+	}
+
+	if (!simpleExpressionHelper) {
+		return remember(RecognizedHelperKind::None);
+	}
+
+	const int32_t arithmeticSamples[] = {
+		-4096, -1024, -255, -31, -17, -3, -2, -1,
+		0, 1, 2, 3, 5, 17, 31, 255, 1024, 4096,
+		0x12345678, 0x2aaaaaaa, 0x3fffffff, 0x55555555,
+		std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::max(),
+	};
+	bool matchesZero = true;
+	bool matchesAdd = true;
+	bool matchesSub = true;
+	bool matchesNegSum = true;
+	for (int32_t lhs: arithmeticSamples) {
+		for (int32_t rhs: arithmeticSamples) {
+			int32_t got = 0;
+			if (!evalPureI32Function(callee, {lhs, rhs}, got)) {
+				return remember(RecognizedHelperKind::None);
+			}
+			matchesZero = matchesZero && (got == 0);
+			matchesAdd = matchesAdd && (got == wrapI32(static_cast<int64_t>(lhs) + rhs));
+			matchesSub = matchesSub && (got == wrapI32(static_cast<int64_t>(lhs) - rhs));
+			matchesNegSum = matchesNegSum && (got == wrapI32(-static_cast<int64_t>(lhs) - rhs));
+			if (!matchesZero && !matchesAdd && !matchesSub && !matchesNegSum) {
 				return remember(RecognizedHelperKind::None);
 			}
 		}
 	}
-	if (matchesAnd) {
-		return remember(RecognizedHelperKind::BitAnd);
+	if (matchesZero) {
+		return remember(RecognizedHelperKind::ConstZero);
 	}
-	if (matchesOr) {
-		return remember(RecognizedHelperKind::BitOr);
+	if (matchesAdd) {
+		return remember(RecognizedHelperKind::Add);
 	}
-	if (matchesXor) {
-		return remember(RecognizedHelperKind::BitXor);
+	if (matchesSub) {
+		return remember(RecognizedHelperKind::Sub);
+	}
+	if (matchesNegSum) {
+		return remember(RecognizedHelperKind::NegSum);
 	}
 	return remember(RecognizedHelperKind::None);
 }

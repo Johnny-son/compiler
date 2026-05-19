@@ -18,6 +18,10 @@ enum class RecognizedHelperKind {
 	BitOr,
 	BitXor,
 	BitNot,
+	ConstZero,
+	Add,
+	Sub,
+	NegSum,
 };
 
 class InstructionSelector {
