@@ -88,6 +88,7 @@ private:
 	std::unordered_map<BasicBlock *, std::string> blockLabels;
 	std::unordered_map<Value *, BasicBlock *> valueBlocks;
 	std::unordered_set<Value *> localOnlyValues;
+	std::unordered_set<Value *> localValuesUsedAfterCall;
 	std::unordered_set<Value *> crossBlockBranchCompareOperands;
 	std::unordered_set<BasicBlock *> callBlocks;
 	std::unordered_map<Value *, MachineOperand> localValueCache;

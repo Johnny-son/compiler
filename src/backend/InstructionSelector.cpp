@@ -426,6 +426,7 @@ void InstructionSelector::analyzeLocalValues()
 {
 	valueBlocks.clear();
 	localOnlyValues.clear();
+	localValuesUsedAfterCall.clear();
 	crossBlockBranchCompareOperands.clear();
 	callBlocks.clear();
 	phiValueRegs.clear();
@@ -507,6 +508,55 @@ void InstructionSelector::analyzeLocalValues()
 				localOnlyValues.insert(rawInst);
 				if (isFloatValue(rawInst)) {
 					++localOnlyFloatValues;
+				}
+			}
+		}
+	}
+
+	for (const auto & block: function.blocks()) {
+		std::unordered_map<Instruction *, std::size_t> instIndices;
+		std::vector<std::size_t> callIndices;
+		const auto instructions = block.instructions();
+		for (std::size_t index = 0; index < instructions.size(); ++index) {
+			auto * inst = instructions[index].raw();
+			if (inst == nullptr) {
+				continue;
+			}
+			instIndices[inst] = index;
+			if (dynamic_cast<CallInst *>(inst) != nullptr) {
+				callIndices.push_back(index);
+			}
+		}
+		if (callIndices.empty()) {
+			continue;
+		}
+
+		for (const auto & inst: instructions) {
+			auto * rawInst = inst.raw();
+			if (rawInst == nullptr || localOnlyValues.find(rawInst) == localOnlyValues.end()) {
+				continue;
+			}
+
+			auto defIter = instIndices.find(rawInst);
+			if (defIter == instIndices.end()) {
+				continue;
+			}
+			const std::size_t defIndex = defIter->second;
+			for (auto * use: rawInst->getUseList()) {
+				auto * userInst = dynamic_cast<Instruction *>(use->getUser());
+				auto useIter = userInst == nullptr ? instIndices.end() : instIndices.find(userInst);
+				if (useIter == instIndices.end()) {
+					continue;
+				}
+				const std::size_t useIndex = useIter->second;
+				for (std::size_t callIndex: callIndices) {
+					if (callIndex > defIndex && useIndex > callIndex) {
+						localValuesUsedAfterCall.insert(rawInst);
+						break;
+					}
+				}
+				if (localValuesUsedAfterCall.find(rawInst) != localValuesUsedAfterCall.end()) {
+					break;
 				}
 			}
 		}
@@ -1401,7 +1451,7 @@ void InstructionSelector::storeValue(const MachineOperand & src, const IRValueVi
 									(value.type() == nullptr || regClassForType(value.type()) == RegisterClass::GPR));
 	const bool cached = canCacheValue && isDefinedInCurrentBlock(value) && rememberValue(value.raw(), src);
 	if (cached && isLocalOnlyValue(value) && isDefinedInCurrentBlock(value) &&
-		callBlocks.find(currentIRBlock) == callBlocks.end()) {
+		localValuesUsedAfterCall.find(value.raw()) == localValuesUsedAfterCall.end()) {
 		return;
 	}
 
