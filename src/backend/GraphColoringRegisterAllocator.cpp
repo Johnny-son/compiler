@@ -104,6 +104,7 @@ MachineOpcode spillStoreOpcode(RegisterClass regClass)
 
 struct InterferenceGraph {
 	std::map<int32_t, std::set<int32_t>> neighbors;
+	std::map<int32_t, std::set<int32_t>> affinities;
 	std::map<int32_t, RegisterClass> classes;
 	std::map<int32_t, std::set<PhysicalReg>> forbiddenColors;
 	std::set<int32_t> mustSpill;
@@ -132,6 +133,15 @@ struct InterferenceGraph {
 		}
 		neighbors[lhs].insert(rhs);
 		neighbors[rhs].insert(lhs);
+	}
+
+	void addAffinity(int32_t lhs, int32_t rhs)
+	{
+		if (lhs < 0 || rhs < 0 || lhs == rhs) {
+			return;
+		}
+		affinities[lhs].insert(rhs);
+		affinities[rhs].insert(lhs);
 	}
 
 	void forbidColor(int32_t vreg, PhysicalReg reg)
@@ -198,6 +208,24 @@ int32_t copySourceForDef(const MachineInstr & inst, int32_t def)
 	return src.vreg;
 }
 
+std::optional<std::pair<int32_t, int32_t>> copyVRegPair(const MachineFunction & function, const MachineInstr & inst)
+{
+	if (inst.opcode != MachineOpcode::COPY || inst.operands.size() < 2) {
+		return std::nullopt;
+	}
+
+	const auto & dst = inst.operands[0];
+	const auto & src = inst.operands[1];
+	if (dst.kind != MachineOperandKind::VirtualReg || dst.role != MachineOperandRole::Def ||
+		src.kind != MachineOperandKind::VirtualReg || src.role != MachineOperandRole::Use) {
+		return std::nullopt;
+	}
+	if (classOf(function, dst.vreg) != classOf(function, src.vreg)) {
+		return std::nullopt;
+	}
+	return std::make_pair(dst.vreg, src.vreg);
+}
+
 InterferenceGraph buildInterferenceGraph(const MachineFunction & function, const MachineLivenessResult & liveness)
 {
 	InterferenceGraph graph;
@@ -216,6 +244,10 @@ InterferenceGraph buildInterferenceGraph(const MachineFunction & function, const
 			}
 			for (int32_t vreg: info.liveOut) {
 				graph.addNode(vreg, classOf(function, vreg));
+			}
+
+			if (auto copyPair = copyVRegPair(function, inst)) {
+				graph.addAffinity(copyPair->first, copyPair->second);
 			}
 
 			for (int32_t def: info.def) {
@@ -378,7 +410,25 @@ ColoringResult colorGraph(const InterferenceGraph & graph)
 		}
 
 		std::optional<PhysicalReg> selected;
-		for (PhysicalReg reg: candidateRegsFor(node, graph)) {
+		const auto candidates = candidateRegsFor(node, graph);
+		auto affinityIter = graph.affinities.find(node);
+		if (affinityIter != graph.affinities.end()) {
+			for (int32_t partner: affinityIter->second) {
+				auto assigned = result.assignment.find(partner);
+				if (assigned == result.assignment.end()) {
+					continue;
+				}
+				if (used.find(assigned->second) == used.end() &&
+					std::find(candidates.begin(), candidates.end(), assigned->second) != candidates.end()) {
+					selected = assigned->second;
+					break;
+				}
+			}
+		}
+		for (PhysicalReg reg: candidates) {
+			if (selected.has_value()) {
+				break;
+			}
 			if (used.find(reg) == used.end()) {
 				selected = reg;
 				break;
