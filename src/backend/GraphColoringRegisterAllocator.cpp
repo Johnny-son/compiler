@@ -181,6 +181,23 @@ void collectPhysicalDefs(const MachineInstr & inst, std::set<PhysicalReg> & defs
 	defs.insert(inst.implicitDefs.begin(), inst.implicitDefs.end());
 }
 
+int32_t copySourceForDef(const MachineInstr & inst, int32_t def)
+{
+	if (inst.opcode != MachineOpcode::COPY || inst.operands.size() < 2) {
+		return -1;
+	}
+
+	const auto & dst = inst.operands[0];
+	const auto & src = inst.operands[1];
+	if (dst.kind != MachineOperandKind::VirtualReg || dst.role != MachineOperandRole::Def || dst.vreg != def) {
+		return -1;
+	}
+	if (src.kind != MachineOperandKind::VirtualReg || src.role != MachineOperandRole::Use) {
+		return -1;
+	}
+	return src.vreg;
+}
+
 InterferenceGraph buildInterferenceGraph(const MachineFunction & function, const MachineLivenessResult & liveness)
 {
 	InterferenceGraph graph;
@@ -203,7 +220,11 @@ InterferenceGraph buildInterferenceGraph(const MachineFunction & function, const
 
 			for (int32_t def: info.def) {
 				graph.addNode(def, classOf(function, def));
+				const int32_t coalescableCopySource = copySourceForDef(inst, def);
 				for (int32_t live: info.liveOut) {
+					if (live == coalescableCopySource && classOf(function, live) == classOf(function, def)) {
+						continue;
+					}
 					graph.addEdge(def, live);
 				}
 			}
