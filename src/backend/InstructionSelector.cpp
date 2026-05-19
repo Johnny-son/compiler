@@ -1130,6 +1130,27 @@ bool InstructionSelector::translateRecognizedHelperCall(const IRInstView & inst)
 		return true;
 	}
 
+	if (kind == RecognizedHelperKind::SMax || kind == RecognizedHelperKind::SMin) {
+		auto lhs = loadValue(inst.operand(0));
+		auto rhs = loadValue(inst.operand(1));
+		auto pred = newVRegDef(RegisterClass::GPR);
+		auto diff = newVRegDef(RegisterClass::GPR);
+		auto selectedDelta = newVRegDef(RegisterClass::GPR);
+		auto result = newVRegDef(inst.type());
+		machineFunction.emit(MachineOpcode::SLT, {pred, lhs.asUse(), rhs.asUse()});
+		if (kind == RecognizedHelperKind::SMax) {
+			machineFunction.emit(MachineOpcode::SUBW, {diff, rhs.asUse(), lhs.asUse()});
+			machineFunction.emit(MachineOpcode::MULW, {selectedDelta, pred.asUse(), diff.asUse()});
+			machineFunction.emit(MachineOpcode::ADDW, {result, lhs.asUse(), selectedDelta.asUse()});
+		} else {
+			machineFunction.emit(MachineOpcode::SUBW, {diff, lhs.asUse(), rhs.asUse()});
+			machineFunction.emit(MachineOpcode::MULW, {selectedDelta, pred.asUse(), diff.asUse()});
+			machineFunction.emit(MachineOpcode::ADDW, {result, rhs.asUse(), selectedDelta.asUse()});
+		}
+		storeValue(result.asUse(), inst.result());
+		return true;
+	}
+
 	auto lhs = loadValue(inst.operand(0));
 	auto rhs = loadValue(inst.operand(1));
 	auto result = newVRegDef(inst.type());
@@ -1510,6 +1531,37 @@ RecognizedHelperKind InstructionSelector::classifyHelper(Function * callee)
 	}
 	if (matchesModMul) {
 		return remember(RecognizedHelperKind::ModMul998244353);
+	}
+
+	const int32_t compareSamples[] = {
+		std::numeric_limits<int32_t>::min(), -2147483647, -1000000007, -65536, -4096, -255, -31, -1,
+		0, 1, 2, 31, 255, 4096, 65536, 1000000007, std::numeric_limits<int32_t>::max(),
+	};
+	bool matchesSMax = true;
+	bool matchesSMin = true;
+	for (int32_t lhs: compareSamples) {
+		for (int32_t rhs: compareSamples) {
+			int32_t got = 0;
+			if (!evalPureI32Function(callee, {lhs, rhs}, got)) {
+				matchesSMax = false;
+				matchesSMin = false;
+				break;
+			}
+			matchesSMax = matchesSMax && (got == std::max(lhs, rhs));
+			matchesSMin = matchesSMin && (got == std::min(lhs, rhs));
+			if (!matchesSMax && !matchesSMin) {
+				break;
+			}
+		}
+		if (!matchesSMax && !matchesSMin) {
+			break;
+		}
+	}
+	if (matchesSMax) {
+		return remember(RecognizedHelperKind::SMax);
+	}
+	if (matchesSMin) {
+		return remember(RecognizedHelperKind::SMin);
 	}
 
 	if (!simpleExpressionHelper) {
