@@ -90,6 +90,7 @@ private:
 	std::unordered_set<Value *> localOnlyValues;
 	std::unordered_set<BasicBlock *> callBlocks;
 	std::unordered_map<Value *, MachineOperand> localValueCache;
+	std::unordered_map<Value *, MachineOperand> phiValueRegs;
 	std::unordered_map<Function *, RecognizedHelperKind> helperKindCache;
 	BasicBlock * currentIRBlock = nullptr;
 	bool localValueCacheEnabled = true;

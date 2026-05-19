@@ -442,6 +442,7 @@ void InstructionSelector::analyzeLocalValues()
 	valueBlocks.clear();
 	localOnlyValues.clear();
 	callBlocks.clear();
+	phiValueRegs.clear();
 	localValueCacheEnabled = true;
 	localFprValueCacheEnabled = false;
 
@@ -458,6 +459,10 @@ void InstructionSelector::analyzeLocalValues()
 			}
 			if (inst.raw() != nullptr) {
 				valueBlocks[inst.raw()] = block.raw();
+			}
+			if (dynamic_cast<PhiInst *>(inst.raw()) != nullptr && inst.hasResult() &&
+				regClassForType(inst.type()) == RegisterClass::GPR) {
+				phiValueRegs.emplace(inst.raw(), newVRegDef(inst.type()).asUse());
 			}
 			if (dynamic_cast<CallInst *>(inst.raw()) != nullptr) {
 				callBlocks.insert(block.raw());
@@ -1316,6 +1321,12 @@ void InstructionSelector::loadValueTo(const IRValueView & value, const MachineOp
 		return;
 	}
 
+	auto phiReg = phiValueRegs.find(value.raw());
+	if (phiReg != phiValueRegs.end()) {
+		machineFunction.emit(MachineOpcode::COPY, {dst.asDef(), phiReg->second.asUse()});
+		return;
+	}
+
 	if (dynamic_cast<AllocaInst *>(value.raw()) != nullptr) {
 		loadAddress(value, dst);
 		return;
@@ -1338,6 +1349,12 @@ void InstructionSelector::loadValueTo(const IRValueView & value, const MachineOp
 void InstructionSelector::storeValue(const MachineOperand & src, const IRValueView & value)
 {
 	if (!value.valid()) {
+		return;
+	}
+
+	auto phiReg = phiValueRegs.find(value.raw());
+	if (phiReg != phiValueRegs.end()) {
+		machineFunction.emit(MachineOpcode::COPY, {phiReg->second.asDef(), src.asUse()});
 		return;
 	}
 
