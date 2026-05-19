@@ -6,6 +6,7 @@
 #include <cstring>
 #include <limits>
 #include <utility>
+#include <vector>
 
 #include "BasicBlock.h"
 #include "Function.h"
@@ -96,6 +97,17 @@ std::string asmSymbolFromIRName(const std::string & irName, const std::string & 
 bool isPowerOfTwo(int32_t value)
 {
 	return value > 0 && (value & (value - 1)) == 0;
+}
+
+std::string gepValueKey(Value * value)
+{
+	if (value == nullptr) {
+		return "null";
+	}
+	if (auto * constant = dynamic_cast<ConstInt *>(value); constant != nullptr) {
+		return "ci:" + std::to_string(constant->getVal());
+	}
+	return "v:" + std::to_string(reinterpret_cast<std::uintptr_t>(value));
 }
 
 bool isSigned12Bit(int64_t value)
@@ -417,6 +429,7 @@ void InstructionSelector::translateBlock(const IRBasicBlockView & block, bool is
 
 	currentIRBlock = block.raw();
 	localValueCache.clear();
+	gepPrefixCache.clear();
 	for (const auto & inst: block.instructions()) {
 		translateInst(inst);
 	}
@@ -965,13 +978,46 @@ void InstructionSelector::translateGEP(const IRInstView & inst)
 		return;
 	}
 
-	auto address = newVRegDef();
 	IRValueView base(gepInst->getBasePointer());
-	loadAddress(base, address);
+	const auto indices = gepInst->getIndices();
+
+	std::vector<std::string> prefixKeys;
+	prefixKeys.reserve(indices.size());
+	std::string prefixKey = "gep:" + gepValueKey(base.raw());
+	for (auto * index: indices) {
+		prefixKey += ":" + gepValueKey(index);
+		prefixKeys.push_back(prefixKey);
+	}
+
+	MachineOperand address;
+	std::size_t firstIndexToEmit = 0;
+	bool foundCachedPrefix = false;
+	for (std::size_t indexNo = prefixKeys.size(); indexNo > 0; --indexNo) {
+		auto iter = gepPrefixCache.find(prefixKeys[indexNo - 1]);
+		if (iter != gepPrefixCache.end()) {
+			address = iter->second.asUse();
+			firstIndexToEmit = indexNo;
+			foundCachedPrefix = true;
+			break;
+		}
+	}
+
+	if (!foundCachedPrefix) {
+		auto baseAddress = newVRegDef();
+		loadAddress(base, baseAddress);
+		address = baseAddress.asUse();
+	}
 
 	Type * currentType = pointeeType(base.raw());
-	const auto indices = gepInst->getIndices();
-	for (std::size_t indexNo = 0; indexNo < indices.size(); ++indexNo) {
+	for (std::size_t indexNo = 0; indexNo < firstIndexToEmit; ++indexNo) {
+		if (indexNo > 0) {
+			if (auto * arrayType = dynamic_cast<ArrayType *>(currentType); arrayType != nullptr) {
+				currentType = arrayType->getElementType();
+			}
+		}
+	}
+
+	for (std::size_t indexNo = firstIndexToEmit; indexNo < indices.size(); ++indexNo) {
 		Type * scaledType = currentType;
 		if (indexNo > 0) {
 			if (auto * arrayType = dynamic_cast<ArrayType *>(currentType); arrayType != nullptr) {
@@ -983,28 +1029,37 @@ void InstructionSelector::translateGEP(const IRInstView & inst)
 		const int32_t scale = scaledType != nullptr ? scaledType->getSize() : FunctionFrameLayout::stackSlotSize;
 		IRValueView indexValue(indices[indexNo]);
 		if (indexValue.isConstantInt()) {
-			const int32_t offset = indexValue.intValue() * scale;
+			const int64_t offset = static_cast<int64_t>(indexValue.intValue()) * scale;
 			if (offset != 0) {
+				auto nextAddress = newVRegDef();
 				machineFunction.emit(
 					MachineOpcode::ADDI,
-					{address.asDef(), address.asUse(), MachineOperand::immValue(offset)});
+					{nextAddress, address.asUse(), MachineOperand::immValue(offset)});
+				address = nextAddress.asUse();
 			}
+			gepPrefixCache[prefixKeys[indexNo]] = address.asUse();
 			continue;
 		}
 
 		auto indexReg = loadValue(indexValue);
+		MachineOperand scaledIndex = indexReg.asUse();
 		if (scale != 1) {
 			if (isPowerOfTwo(scale)) {
+				scaledIndex = newVRegDef();
 				machineFunction.emit(
 					MachineOpcode::SLLI,
-					{indexReg.asDef(), indexReg.asUse(), MachineOperand::immValue(log2Int(scale))});
+					{scaledIndex.asDef(), indexReg.asUse(), MachineOperand::immValue(log2Int(scale))});
 			} else {
 				auto scaleReg = newVRegDef();
 				machineFunction.emit(MachineOpcode::LI, {scaleReg, MachineOperand::immValue(scale)});
-				machineFunction.emit(MachineOpcode::MUL, {indexReg.asDef(), indexReg.asUse(), scaleReg.asUse()});
+				scaledIndex = newVRegDef();
+				machineFunction.emit(MachineOpcode::MUL, {scaledIndex.asDef(), indexReg.asUse(), scaleReg.asUse()});
 			}
 		}
-		machineFunction.emit(MachineOpcode::ADD, {address.asDef(), address.asUse(), indexReg.asUse()});
+		auto nextAddress = newVRegDef();
+		machineFunction.emit(MachineOpcode::ADD, {nextAddress, address.asUse(), scaledIndex.asUse()});
+		address = nextAddress.asUse();
+		gepPrefixCache[prefixKeys[indexNo]] = address.asUse();
 	}
 
 	storeValue(address.asUse(), inst.result());
@@ -1085,6 +1140,7 @@ void InstructionSelector::translateCall(const IRInstView & inst)
 		storeValue(MachineOperand::pregUse(returnReg), inst.result());
 	}
 	localValueCache.clear();
+	gepPrefixCache.clear();
 }
 
 bool InstructionSelector::translateRecognizedHelperCall(const IRInstView & inst)

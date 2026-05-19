@@ -92,6 +92,7 @@ private:
 	std::unordered_set<Value *> crossBlockBranchCompareOperands;
 	std::unordered_set<BasicBlock *> callBlocks;
 	std::unordered_map<Value *, MachineOperand> localValueCache;
+	std::unordered_map<std::string, MachineOperand> gepPrefixCache;
 	std::unordered_map<Value *, MachineOperand> phiValueRegs;
 	std::unordered_map<Function *, RecognizedHelperKind> helperKindCache;
 	BasicBlock * currentIRBlock = nullptr;
