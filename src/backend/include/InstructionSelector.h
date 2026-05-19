@@ -22,6 +22,7 @@ enum class RecognizedHelperKind {
 	Add,
 	Sub,
 	NegSum,
+	ModMul998244353,
 };
 
 class InstructionSelector {

@@ -160,6 +160,8 @@ std::string MachineAsmLowering::opcodeName(MachineOpcode opcode) const
 			return "mul";
 		case MachineOpcode::MULW:
 			return "mulw";
+		case MachineOpcode::REM:
+			return "rem";
 		case MachineOpcode::DIVW:
 			return "divw";
 		case MachineOpcode::REMW:

@@ -76,6 +76,7 @@ enum class MachineOpcode : std::int16_t {
 	SUBW,
 	MUL,
 	MULW,
+	REM,
 	DIVW,
 	REMW,
 	SLLI,

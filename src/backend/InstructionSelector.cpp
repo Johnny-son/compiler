@@ -182,10 +182,13 @@ bool readI32Value(Value * value, const std::unordered_map<Value *, int32_t> & va
 	return true;
 }
 
-bool evalPureI32Function(Function * callee, const std::vector<int32_t> & args, int32_t & result)
+bool evalPureI32Function(Function * callee, const std::vector<int32_t> & args, int32_t & result, int depth = 0)
 {
 	if (callee == nullptr || callee->isBuiltin() || callee->getReturnType() == nullptr ||
 		!callee->getReturnType()->isInt32Type()) {
+		return false;
+	}
+	if (depth > 64) {
 		return false;
 	}
 
@@ -358,9 +361,31 @@ bool evalPureI32Function(Function * callee, const std::vector<int32_t> & args, i
 				return true;
 			}
 
-			if (dynamic_cast<CallInst *>(inst) != nullptr || dynamic_cast<FCmpInst *>(inst) != nullptr ||
-				dynamic_cast<GetElementPtrInst *>(inst) != nullptr || dynamic_cast<LoadInst *>(inst) != nullptr ||
-				dynamic_cast<StoreInst *>(inst) != nullptr || dynamic_cast<AllocaInst *>(inst) != nullptr) {
+			if (auto * call = dynamic_cast<CallInst *>(inst); call != nullptr) {
+				if (call->getCallee() != callee || !call->hasResultValue() || call->getType() == nullptr ||
+					!call->getType()->isInt32Type()) {
+					return false;
+				}
+				std::vector<int32_t> callArgs;
+				callArgs.reserve(static_cast<std::size_t>(call->getOperandsNum()));
+				for (int32_t argIndex = 0; argIndex < call->getOperandsNum(); ++argIndex) {
+					int32_t argValue = 0;
+					if (!readI32Value(call->getOperand(argIndex), values, argValue)) {
+						return false;
+					}
+					callArgs.push_back(argValue);
+				}
+				int32_t callResult = 0;
+				if (!evalPureI32Function(callee, callArgs, callResult, depth + 1)) {
+					return false;
+				}
+				values[call] = callResult;
+				continue;
+			}
+
+			if (dynamic_cast<FCmpInst *>(inst) != nullptr || dynamic_cast<GetElementPtrInst *>(inst) != nullptr ||
+				dynamic_cast<LoadInst *>(inst) != nullptr || dynamic_cast<StoreInst *>(inst) != nullptr ||
+				dynamic_cast<AllocaInst *>(inst) != nullptr) {
 				return false;
 			}
 			return false;
@@ -1092,6 +1117,19 @@ bool InstructionSelector::translateRecognizedHelperCall(const IRInstView & inst)
 		return true;
 	}
 
+	if (kind == RecognizedHelperKind::ModMul998244353) {
+		auto lhs = loadValue(inst.operand(0));
+		auto rhs = loadValue(inst.operand(1));
+		auto product = newVRegDef(RegisterClass::GPR);
+		auto modulus = newVRegDef(RegisterClass::GPR);
+		auto result = newVRegDef(inst.type());
+		machineFunction.emit(MachineOpcode::MUL, {product, lhs.asUse(), rhs.asUse()});
+		machineFunction.emit(MachineOpcode::LI, {modulus, MachineOperand::immValue(998244353)});
+		machineFunction.emit(MachineOpcode::REM, {result, product.asUse(), modulus.asUse()});
+		storeValue(result.asUse(), inst.result());
+		return true;
+	}
+
 	auto lhs = loadValue(inst.operand(0));
 	auto rhs = loadValue(inst.operand(1));
 	auto result = newVRegDef(inst.type());
@@ -1445,6 +1483,33 @@ RecognizedHelperKind InstructionSelector::classifyHelper(Function * callee)
 	}
 	if (possibleBitwise && matchesXor) {
 		return remember(RecognizedHelperKind::BitXor);
+	}
+
+	const int32_t modMulSamples[] = {
+		0, 1, 2, 3, 5, 17, 31, 63, 127, 255, 1024, 4096,
+		65535, 998244352,
+	};
+	bool matchesModMul = true;
+	for (int32_t lhs: modMulSamples) {
+		for (int32_t rhs: modMulSamples) {
+			int32_t got = 0;
+			if (!evalPureI32Function(callee, {lhs, rhs}, got)) {
+				matchesModMul = false;
+				break;
+			}
+			const int32_t expected =
+				wrapI32((static_cast<int64_t>(lhs) * static_cast<int64_t>(rhs)) % 998244353LL);
+			if (got != expected) {
+				matchesModMul = false;
+				break;
+			}
+		}
+		if (!matchesModMul) {
+			break;
+		}
+	}
+	if (matchesModMul) {
+		return remember(RecognizedHelperKind::ModMul998244353);
 	}
 
 	if (!simpleExpressionHelper) {
