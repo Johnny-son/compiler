@@ -142,21 +142,6 @@ bool blockContainsInstruction(BasicBlock * block, Instruction * inst)
 	return false;
 }
 
-bool isOnlyUsedByLocalConditionalBranches(Instruction * inst, BasicBlock * block)
-{
-	if (!isOnlyUsedByConditionalBranches(inst)) {
-		return false;
-	}
-
-	for (auto * use: inst->getUseList()) {
-		auto * branch = dynamic_cast<BranchInst *>(use->getUser());
-		if (!blockContainsInstruction(block, branch)) {
-			return false;
-		}
-	}
-	return true;
-}
-
 bool isFloatValue(Value * value)
 {
 	return value != nullptr && value->getType() != nullptr && value->getType()->isFloatType();
@@ -441,6 +426,7 @@ void InstructionSelector::analyzeLocalValues()
 {
 	valueBlocks.clear();
 	localOnlyValues.clear();
+	crossBlockBranchCompareOperands.clear();
 	callBlocks.clear();
 	phiValueRegs.clear();
 	localValueCacheEnabled = true;
@@ -471,6 +457,31 @@ void InstructionSelector::analyzeLocalValues()
 		}
 	}
 
+	for (const auto & block: function.blocks()) {
+		for (const auto & inst: block.instructions()) {
+			auto * cmp = dynamic_cast<ICmpInst *>(inst.raw());
+			if (cmp == nullptr || !isOnlyUsedByConditionalBranches(cmp) || cmp->getOperandsNum() != 2) {
+				continue;
+			}
+
+			for (auto * use: cmp->getUseList()) {
+				auto * branch = dynamic_cast<BranchInst *>(use->getUser());
+				auto branchBlockIter = branch == nullptr ? valueBlocks.end() : valueBlocks.find(branch);
+				if (branchBlockIter == valueBlocks.end()) {
+					continue;
+				}
+
+				for (int32_t index = 0; index < cmp->getOperandsNum(); ++index) {
+					auto * operandInst = dynamic_cast<Instruction *>(cmp->getOperand(index));
+					auto operandBlockIter = operandInst == nullptr ? valueBlocks.end() : valueBlocks.find(operandInst);
+					if (operandBlockIter != valueBlocks.end() && operandBlockIter->second != branchBlockIter->second) {
+						crossBlockBranchCompareOperands.insert(operandInst);
+					}
+				}
+			}
+		}
+	}
+
 	int localOnlyFloatValues = 0;
 	for (const auto & block: function.blocks()) {
 		for (const auto & inst: block.instructions()) {
@@ -480,6 +491,9 @@ void InstructionSelector::analyzeLocalValues()
 			}
 
 			bool localOnly = true;
+			if (crossBlockBranchCompareOperands.find(rawInst) != crossBlockBranchCompareOperands.end()) {
+				localOnly = false;
+			}
 			for (auto * use: rawInst->getUseList()) {
 				auto * userInst = dynamic_cast<Instruction *>(use->getUser());
 				auto iter = userInst == nullptr ? valueBlocks.end() : valueBlocks.find(userInst);
@@ -520,7 +534,7 @@ void InstructionSelector::translateInst(const IRInstView & inst)
 			translateBinary(inst);
 			break;
 		case IRInstKind::ICmp:
-			if (isOnlyUsedByLocalConditionalBranches(inst.raw(), currentIRBlock)) {
+			if (isOnlyUsedByConditionalBranches(inst.raw())) {
 				break;
 			}
 			translateICmp(inst);
@@ -1204,7 +1218,8 @@ void InstructionSelector::translateBranch(const IRInstView & inst)
 	};
 
 	auto * cmpInst = dynamic_cast<ICmpInst *>(inst.operand(0).raw());
-	const bool canFuseCmpBranch = blockContainsInstruction(currentIRBlock, cmpInst);
+	const bool canFuseCmpBranch =
+		blockContainsInstruction(currentIRBlock, cmpInst) || isOnlyUsedByConditionalBranches(cmpInst);
 	if (canFuseCmpBranch && cmpInst != nullptr && cmpInst->getOperandsNum() == 2) {
 		auto lhs = loadBranchOperand(IRValueView(cmpInst->getOperand(0)));
 		auto rhs = loadBranchOperand(IRValueView(cmpInst->getOperand(1)));
