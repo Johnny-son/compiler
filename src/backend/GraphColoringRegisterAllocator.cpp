@@ -574,6 +574,30 @@ void rewriteFrameSetup(MachineFunction & function, const FunctionFrameLayout & l
 			}
 		}
 	}
+
+	for (auto & block: function.blocks()) {
+		for (auto & inst: block.instructions()) {
+			if (inst.opcode == MachineOpcode::LD && inst.operands.size() >= 2 &&
+				inst.operands[0].kind == MachineOperandKind::PhysicalReg &&
+				inst.operands[1].kind == MachineOperandKind::Memory && inst.operands[1].memoryBaseIsPhysical &&
+				inst.operands[1].memoryBasePreg == PhysicalReg::SP) {
+				if (inst.operands[0].preg == PhysicalReg::RA) {
+					inst.operands[1].memoryOffset = frameSize + FunctionFrameLayout::savedRaOffset;
+				} else if (inst.operands[0].preg == PhysicalReg::FP) {
+					inst.operands[1].memoryOffset = frameSize + FunctionFrameLayout::savedFpOffset;
+				}
+				continue;
+			}
+
+			if (inst.opcode == MachineOpcode::ADDI && inst.operands.size() >= 3 &&
+				inst.operands[0].kind == MachineOperandKind::PhysicalReg &&
+				inst.operands[1].kind == MachineOperandKind::PhysicalReg &&
+				inst.operands[2].kind == MachineOperandKind::Immediate && inst.operands[0].preg == PhysicalReg::SP &&
+				inst.operands[1].preg == PhysicalReg::SP && inst.operands[2].imm > 0) {
+				inst.operands[2].imm = frameSize;
+			}
+		}
+	}
 }
 
 void rewriteOperandWithAssignment(MachineOperand & operand, const std::unordered_map<int32_t, PhysicalReg> & assignment)
@@ -644,8 +668,9 @@ bool isSavedReturnAddressLoad(const MachineInstr & inst)
 	return inst.opcode == MachineOpcode::LD && inst.operands.size() >= 2 &&
 		   inst.operands[0].kind == MachineOperandKind::PhysicalReg && inst.operands[0].preg == PhysicalReg::RA &&
 		   inst.operands[1].kind == MachineOperandKind::Memory && inst.operands[1].memoryBaseIsPhysical &&
-		   inst.operands[1].memoryBasePreg == PhysicalReg::FP &&
-		   inst.operands[1].memoryOffset == FunctionFrameLayout::savedRaOffset;
+		   ((inst.operands[1].memoryBasePreg == PhysicalReg::FP &&
+			 inst.operands[1].memoryOffset == FunctionFrameLayout::savedRaOffset) ||
+		    inst.operands[1].memoryBasePreg == PhysicalReg::SP);
 }
 
 bool isOldFramePointerLoad(const MachineInstr & inst)

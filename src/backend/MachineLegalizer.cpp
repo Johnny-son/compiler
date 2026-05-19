@@ -41,7 +41,8 @@ bool MachineLegalizer::isFrameSetupInstruction(const MachineInstr & inst)
 	if (inst.opcode == MachineOpcode::ADDI && inst.operands.size() >= 3) {
 		return inst.operands[0].kind == MachineOperandKind::PhysicalReg &&
 			   inst.operands[1].kind == MachineOperandKind::PhysicalReg &&
-			   ((inst.operands[0].preg == PhysicalReg::SP && inst.operands[1].preg == PhysicalReg::SP) ||
+			   ((inst.operands[0].preg == PhysicalReg::SP && inst.operands[1].preg == PhysicalReg::SP &&
+			     inst.operands[2].kind == MachineOperandKind::Immediate && inst.operands[2].imm <= 0) ||
 			    (inst.operands[0].preg == PhysicalReg::FP && inst.operands[1].preg == PhysicalReg::SP));
 	}
 

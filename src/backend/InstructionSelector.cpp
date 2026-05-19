@@ -1272,6 +1272,27 @@ void InstructionSelector::translateReturn(const IRInstView & inst)
 		machineFunction.emit(MachineOpcode::COPY, {MachineOperand::pregDef(returnReg), value.asUse()});
 	}
 
+	const int frameSize = frameLayout.frameSize();
+	if (frameSize > 0 && isSigned12Bit(frameSize) &&
+		isSigned12Bit(frameSize + FunctionFrameLayout::savedRaOffset) &&
+		isSigned12Bit(frameSize + FunctionFrameLayout::savedFpOffset)) {
+		machineFunction.emit(
+			MachineOpcode::LD,
+			{MachineOperand::pregDef(PhysicalReg::RA),
+			 MachineOperand::mem(PhysicalReg::SP, frameSize + FunctionFrameLayout::savedRaOffset)});
+		machineFunction.emit(
+			MachineOpcode::LD,
+			{MachineOperand::pregDef(PhysicalReg::FP),
+			 MachineOperand::mem(PhysicalReg::SP, frameSize + FunctionFrameLayout::savedFpOffset)});
+		machineFunction.emit(
+			MachineOpcode::ADDI,
+			{MachineOperand::pregDef(PhysicalReg::SP),
+			 MachineOperand::pregUse(PhysicalReg::SP),
+			 MachineOperand::immValue(frameSize)});
+		machineFunction.emit(MachineOpcode::RET);
+		return;
+	}
+
 	auto oldFp = newVRegDef();
 	machineFunction.emit(
 		MachineOpcode::LD,
