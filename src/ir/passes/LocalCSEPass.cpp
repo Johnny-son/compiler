@@ -3,6 +3,7 @@
 #include "LocalCSEPass.h"
 
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -11,6 +12,8 @@
 #include "BasicBlock.h"
 #include "BinaryInst.h"
 #include "CastInst.h"
+#include "ConstFloat.h"
+#include "ConstInt.h"
 #include "FCmpInst.h"
 #include "GetElementPtrInst.h"
 #include "IRCFG.h"
@@ -24,17 +27,98 @@
 
 namespace {
 
-using AvailableMap = std::unordered_map<std::string, Instruction *>;
-
-std::string valueKey(Value * value)
-{
-	return std::to_string(reinterpret_cast<std::uintptr_t>(value));
-}
-
 std::string typeKey(Type * type)
 {
 	return std::to_string(reinterpret_cast<std::uintptr_t>(type));
 }
+
+struct GVNState {
+	int nextNumber = 1;
+	std::unordered_map<Value *, int> valueNumbers;
+	std::unordered_map<std::string, int> expressionNumbers;
+	std::unordered_map<int, Value *> representatives;
+
+	int freshNumber(Value * representative)
+	{
+		const int number = nextNumber++;
+		if (representative != nullptr) {
+			representatives.emplace(number, representative);
+		}
+		return number;
+	}
+
+	void remember(Value * value, int number)
+	{
+		if (value == nullptr || number <= 0) {
+			return;
+		}
+		valueNumbers[value] = number;
+		representatives.try_emplace(number, value);
+	}
+
+	int stableNumber(const std::string & key, Value * representative)
+	{
+		auto iter = expressionNumbers.find(key);
+		if (iter != expressionNumbers.end()) {
+			if (representative != nullptr) {
+				representatives.try_emplace(iter->second, representative);
+			}
+			return iter->second;
+		}
+
+		const int number = freshNumber(representative);
+		expressionNumbers.emplace(key, number);
+		return number;
+	}
+
+	int numberFor(Value * value)
+	{
+		if (value == nullptr) {
+			return 0;
+		}
+
+		auto iter = valueNumbers.find(value);
+		if (iter != valueNumbers.end()) {
+			return iter->second;
+		}
+
+		if (auto * constant = dynamic_cast<ConstInt *>(value); constant != nullptr) {
+			const int number = stableNumber(
+				"const-int:" + typeKey(value->getType()) + ":" + std::to_string(constant->getVal()),
+				value);
+			remember(value, number);
+			return number;
+		}
+
+		if (auto * constant = dynamic_cast<ConstFloat *>(value); constant != nullptr) {
+			uint32_t bits = 0;
+			const float floatValue = constant->getVal();
+			std::memcpy(&bits, &floatValue, sizeof(bits));
+			const int number = stableNumber(
+				"const-float:" + typeKey(value->getType()) + ":" + std::to_string(bits),
+				value);
+			remember(value, number);
+			return number;
+		}
+
+		const int number = freshNumber(value);
+		remember(value, number);
+		return number;
+	}
+
+	int numberForExpression(const std::string & key, Value * representative)
+	{
+		const int number = stableNumber("expr:" + key, representative);
+		remember(representative, number);
+		return number;
+	}
+
+	Value * representativeFor(int number) const
+	{
+		auto iter = representatives.find(number);
+		return iter == representatives.end() ? nullptr : iter->second;
+	}
+};
 
 bool isCommutativeBinary(BinaryInst::Op op)
 {
@@ -46,49 +130,54 @@ bool isCommutativeICmp(ICmpInst::Predicate predicate)
 	return predicate == ICmpInst::Predicate::EQ || predicate == ICmpInst::Predicate::NE;
 }
 
-std::pair<Value *, Value *> orderedOperands(Value * lhs, Value * rhs)
+std::pair<int, int> orderedNumbers(int lhs, int rhs)
 {
-	if (valueKey(rhs) < valueKey(lhs)) {
+	if (rhs < lhs) {
 		return {rhs, lhs};
 	}
 	return {lhs, rhs};
 }
 
-std::string instructionKey(Instruction * inst)
+std::string instructionKey(Instruction * inst, GVNState & state)
 {
 	if (inst == nullptr || inst->isTerminator() || !inst->hasResultValue()) {
 		return "";
 	}
 
 	if (auto * binary = dynamic_cast<BinaryInst *>(inst); binary != nullptr && binary->getOperandsNum() == 2) {
+		const int lhsNumber = state.numberFor(binary->getOperand(0));
+		const int rhsNumber = state.numberFor(binary->getOperand(1));
 		auto operands = isCommutativeBinary(binary->getBinaryOp())
-			? orderedOperands(binary->getOperand(0), binary->getOperand(1))
-			: std::make_pair(binary->getOperand(0), binary->getOperand(1));
+			? orderedNumbers(lhsNumber, rhsNumber)
+			: std::make_pair(lhsNumber, rhsNumber);
 		return "bin:" + std::to_string(static_cast<int>(binary->getBinaryOp())) + ":" + typeKey(binary->getType()) +
-			   ":" + valueKey(operands.first) + ":" + valueKey(operands.second);
+			   ":" + std::to_string(operands.first) + ":" + std::to_string(operands.second);
 	}
 	if (auto * icmp = dynamic_cast<ICmpInst *>(inst); icmp != nullptr && icmp->getOperandsNum() == 2) {
+		const int lhsNumber = state.numberFor(icmp->getOperand(0));
+		const int rhsNumber = state.numberFor(icmp->getOperand(1));
 		auto operands = isCommutativeICmp(icmp->getPredicate())
-			? orderedOperands(icmp->getOperand(0), icmp->getOperand(1))
-			: std::make_pair(icmp->getOperand(0), icmp->getOperand(1));
+			? orderedNumbers(lhsNumber, rhsNumber)
+			: std::make_pair(lhsNumber, rhsNumber);
 		return "icmp:" + std::to_string(static_cast<int>(icmp->getPredicate())) +
-			   ":" + valueKey(operands.first) + ":" + valueKey(operands.second);
+			   ":" + std::to_string(operands.first) + ":" + std::to_string(operands.second);
 	}
 	if (auto * fcmp = dynamic_cast<FCmpInst *>(inst); fcmp != nullptr && fcmp->getOperandsNum() == 2) {
-		return "fcmp:" + std::to_string(static_cast<int>(fcmp->getPredicate())) + ":" + valueKey(fcmp->getOperand(0)) +
-			   ":" + valueKey(fcmp->getOperand(1));
+		return "fcmp:" + std::to_string(static_cast<int>(fcmp->getPredicate())) + ":" +
+			   std::to_string(state.numberFor(fcmp->getOperand(0))) + ":" +
+			   std::to_string(state.numberFor(fcmp->getOperand(1)));
 	}
 	if (auto * zext = dynamic_cast<ZExtInst *>(inst); zext != nullptr && zext->getOperandsNum() == 1) {
-		return "zext:" + typeKey(zext->getType()) + ":" + valueKey(zext->getSourceValue());
+		return "zext:" + typeKey(zext->getType()) + ":" + std::to_string(state.numberFor(zext->getSourceValue()));
 	}
 	if (auto * cast = dynamic_cast<CastInst *>(inst); cast != nullptr && cast->getOperandsNum() == 1) {
 		return "cast:" + std::to_string(static_cast<int>(cast->getCastOp())) + ":" + typeKey(cast->getType()) + ":" +
-			   valueKey(cast->getOperand(0));
+			   std::to_string(state.numberFor(cast->getOperand(0)));
 	}
 	if (auto * gep = dynamic_cast<GetElementPtrInst *>(inst); gep != nullptr && gep->getOperandsNum() >= 1) {
-		std::string key = "gep:" + typeKey(gep->getType()) + ":" + valueKey(gep->getBasePointer());
+		std::string key = "gep:" + typeKey(gep->getType()) + ":" + std::to_string(state.numberFor(gep->getBasePointer()));
 		for (auto * index: gep->getIndices()) {
-			key += ":" + valueKey(index);
+			key += ":" + std::to_string(state.numberFor(index));
 		}
 		return key;
 	}
@@ -96,32 +185,40 @@ std::string instructionKey(Instruction * inst)
 	return "";
 }
 
-bool runOnBlock(BasicBlock * block, const DominanceInfo & dominance, AvailableMap & available)
+bool runOnBlock(BasicBlock * block, const DominanceInfo & dominance, GVNState state)
 {
 	if (block == nullptr) {
 		return false;
 	}
 
 	bool changed = false;
-	std::vector<std::pair<std::string, Instruction *>> inserted;
 	auto & instructions = block->getInstructions();
 	for (auto iter = instructions.begin(); iter != instructions.end();) {
 		auto * inst = *iter;
-		const std::string key = instructionKey(inst);
+		const std::string key = instructionKey(inst, state);
 		if (key.empty()) {
+			if (inst != nullptr && inst->hasResultValue()) {
+				(void) state.numberFor(inst);
+			}
 			++iter;
 			continue;
 		}
 
-		auto availableIter = available.find(key);
-		if (availableIter == available.end()) {
-			available.insert({key, inst});
-			inserted.push_back({key, inst});
+		auto availableIter = state.expressionNumbers.find("expr:" + key);
+		if (availableIter == state.expressionNumbers.end()) {
+			(void) state.numberForExpression(key, inst);
 			++iter;
 			continue;
 		}
 
-		auto * replacement = availableIter->second;
+		const int expressionNumber = availableIter->second;
+		auto * replacement = state.representativeFor(expressionNumber);
+		if (replacement == nullptr || replacement == inst) {
+			state.remember(inst, expressionNumber);
+			++iter;
+			continue;
+		}
+
 		iter = instructions.erase(iter);
 		inst->replaceAllUseWith(replacement);
 		inst->clearOperands();
@@ -133,16 +230,10 @@ bool runOnBlock(BasicBlock * block, const DominanceInfo & dominance, AvailableMa
 	auto childrenIter = dominance.dominatorTreeChildren.find(block);
 	if (childrenIter != dominance.dominatorTreeChildren.end()) {
 		for (auto * child: childrenIter->second) {
-			changed |= runOnBlock(child, dominance, available);
+			changed |= runOnBlock(child, dominance, state);
 		}
 	}
 
-	for (auto iter = inserted.rbegin(); iter != inserted.rend(); ++iter) {
-		auto availableIter = available.find(iter->first);
-		if (availableIter != available.end() && availableIter->second == iter->second) {
-			available.erase(availableIter);
-		}
-	}
 	return changed;
 }
 
@@ -159,8 +250,7 @@ bool runOnFunction(Function * function)
 
 	IRCFG cfg = IRCFGBuilder::build(function);
 	DominanceInfo dominance = DominanceBuilder::build(cfg, entry);
-	AvailableMap available;
-	return runOnBlock(entry, dominance, available);
+	return runOnBlock(entry, dominance, GVNState{});
 }
 
 } // namespace
