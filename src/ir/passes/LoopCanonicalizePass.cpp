@@ -138,6 +138,73 @@ void rewriteHeaderPhis(Function * function, const std::vector<BasicBlock *> & ex
 	}
 }
 
+bool exitNeedsDedicatedBlock(const IRCFG & cfg, const IRLoopInfo & loop, BasicBlock * exitBlock)
+{
+	auto predIter = cfg.predecessors.find(exitBlock);
+	if (predIter == cfg.predecessors.end()) {
+		return false;
+	}
+
+	bool hasLoopPred = false;
+	bool hasOutsidePred = false;
+	for (auto * pred: predIter->second) {
+		if (loop.contains(pred)) {
+			hasLoopPred = true;
+		} else {
+			hasOutsidePred = true;
+		}
+	}
+	return hasLoopPred && hasOutsidePred;
+}
+
+void replaceExitPhiIncomingBlock(BasicBlock * exitBlock, BasicBlock * oldPred, BasicBlock * newPred)
+{
+	for (auto * inst: exitBlock->getInstructions()) {
+		auto * phi = dynamic_cast<PhiInst *>(inst);
+		if (phi == nullptr) {
+			break;
+		}
+		phi->replaceIncomingBlock(oldPred, newPred);
+	}
+}
+
+bool splitOneDedicatedExit(Function * function)
+{
+	IRCFG cfg = IRCFGBuilder::build(function);
+	for (const auto & loop: findNaturalLoops(function, false)) {
+		if (!loopHasSingleEntry(cfg, loop)) {
+			continue;
+		}
+
+		for (auto * exitBlock: loop.exitBlocks) {
+			if (!exitNeedsDedicatedBlock(cfg, loop, exitBlock)) {
+				continue;
+			}
+
+			auto predIter = cfg.predecessors.find(exitBlock);
+			if (predIter == cfg.predecessors.end()) {
+				continue;
+			}
+
+			for (auto * pred: predIter->second) {
+				if (!loop.contains(pred) || !canRedirectToPreheader(pred, exitBlock)) {
+					continue;
+				}
+
+				auto * dedicatedExit = function->createBlock(exitBlock->getIRName() + ".loop.exit");
+				moveBlockBefore(function, dedicatedExit, exitBlock);
+				dedicatedExit->appendInst(new BranchInst(function, exitBlock));
+				replaceExitPhiIncomingBlock(exitBlock, pred, dedicatedExit);
+				if (!replaceBranchTarget(pred, exitBlock, dedicatedExit)) {
+					return false;
+				}
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
 bool canonicalizeOneLoop(Function * function)
 {
 	IRCFG cfg = IRCFGBuilder::build(function);
@@ -184,6 +251,11 @@ bool runOnFunction(Function * function)
 	bool localChanged = true;
 	while (localChanged) {
 		localChanged = canonicalizeOneLoop(function);
+		changed |= localChanged;
+	}
+	localChanged = true;
+	while (localChanged) {
+		localChanged = splitOneDedicatedExit(function);
 		changed |= localChanged;
 	}
 	return changed;
