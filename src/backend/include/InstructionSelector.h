@@ -9,7 +9,9 @@
 #include "MachineIR.h"
 
 class BasicBlock;
+class BinaryInst;
 class Function;
+class ICmpInst;
 class Value;
 
 enum class RecognizedHelperKind {
@@ -54,6 +56,9 @@ private:
 	void translateBranch(const IRInstView & inst);
 	void translateReturn(const IRInstView & inst);
 
+	bool isModuloZeroBranchRemainder(BinaryInst * remainder) const;
+	bool matchModuloZeroCompare(ICmpInst * cmp, BinaryInst *& remainder, int32_t & mask) const;
+	bool tryEmitModuloZeroBranch(ICmpInst * cmp, const std::string & trueLabel);
 	MachineOperand newVRegDef(RegisterClass regClass = RegisterClass::GPR);
 	MachineOperand newVRegDef(Type * type);
 	MachineOperand loadValue(const IRValueView & value);

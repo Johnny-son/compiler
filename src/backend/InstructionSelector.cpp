@@ -125,6 +125,12 @@ int32_t log2Int(int32_t value)
 	return shift;
 }
 
+bool absModuloTwoDivisor(int32_t value, int32_t & absValue)
+{
+	absValue = value < 0 ? -value : value;
+	return absValue == 2;
+}
+
 bool isOnlyUsedByConditionalBranches(Instruction * inst)
 {
 	if (inst == nullptr || inst->getUseList().empty()) {
@@ -811,6 +817,10 @@ void InstructionSelector::translateBinary(const IRInstView & inst)
 			storeValue(MachineOperand::pregUse(PhysicalReg::Zero), inst.result());
 			return;
 		}
+
+		if (op == BinaryInst::Op::SRem && isModuloZeroBranchRemainder(binaryInst)) {
+			return;
+		}
 	}
 
 	MachineOpcode opcode = MachineOpcode::ADDW;
@@ -1303,6 +1313,81 @@ void InstructionSelector::translatePhi(const IRInstView &)
 	// Phi copies are emitted on incoming control-flow edges in translateBranch().
 }
 
+bool InstructionSelector::matchModuloZeroCompare(ICmpInst * cmp, BinaryInst *& remainder, int32_t & mask) const
+{
+	remainder = nullptr;
+	mask = 0;
+	if (cmp == nullptr || cmp->getOperandsNum() != 2 ||
+		(cmp->getPredicate() != ICmpInst::Predicate::EQ && cmp->getPredicate() != ICmpInst::Predicate::NE)) {
+		return false;
+	}
+
+	auto * zero = dynamic_cast<ConstInt *>(cmp->getOperand(1));
+	auto * rem = dynamic_cast<BinaryInst *>(cmp->getOperand(0));
+	if ((zero == nullptr || zero->getVal() != 0) || rem == nullptr) {
+		zero = dynamic_cast<ConstInt *>(cmp->getOperand(0));
+		rem = dynamic_cast<BinaryInst *>(cmp->getOperand(1));
+	}
+	if (zero == nullptr || zero->getVal() != 0 || rem == nullptr || rem->getBinaryOp() != BinaryInst::Op::SRem ||
+		rem->getOperandsNum() != 2) {
+		return false;
+	}
+
+	auto * divisor = dynamic_cast<ConstInt *>(rem->getOperand(1));
+	int32_t absDivisor = 0;
+	if (divisor == nullptr || !absModuloTwoDivisor(divisor->getVal(), absDivisor)) {
+		return false;
+	}
+
+	remainder = rem;
+	mask = absDivisor - 1;
+	return true;
+}
+
+bool InstructionSelector::isModuloZeroBranchRemainder(BinaryInst * remainder) const
+{
+	if (remainder == nullptr || remainder->getUseList().empty()) {
+		return false;
+	}
+
+	for (auto * use: remainder->getUseList()) {
+		auto * cmp = dynamic_cast<ICmpInst *>(use->getUser());
+		BinaryInst * matchedRemainder = nullptr;
+		int32_t mask = 0;
+		if (cmp == nullptr || !matchModuloZeroCompare(cmp, matchedRemainder, mask) || matchedRemainder != remainder ||
+			!isOnlyUsedByConditionalBranches(cmp)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+bool InstructionSelector::tryEmitModuloZeroBranch(ICmpInst * cmp, const std::string & trueLabel)
+{
+	BinaryInst * remainder = nullptr;
+	int32_t mask = 0;
+	if (!matchModuloZeroCompare(cmp, remainder, mask) || !isModuloZeroBranchRemainder(remainder)) {
+		return false;
+	}
+
+	auto value = loadValue(IRValueView(remainder->getOperand(0)));
+	auto masked = newVRegDef(remainder->getType());
+	if (isSigned12Bit(mask)) {
+		machineFunction.emit(MachineOpcode::ANDI, {masked, value.asUse(), MachineOperand::immValue(mask)});
+	} else {
+		auto maskReg = newVRegDef(remainder->getType());
+		machineFunction.emit(MachineOpcode::LI, {maskReg, MachineOperand::immValue(mask)});
+		machineFunction.emit(MachineOpcode::AND, {masked, value.asUse(), maskReg.asUse()});
+	}
+
+	const MachineOpcode branchOpcode =
+		cmp->getPredicate() == ICmpInst::Predicate::EQ ? MachineOpcode::BEQ : MachineOpcode::BNE;
+	machineFunction.emit(
+		branchOpcode,
+		{masked.asUse(), MachineOperand::pregUse(PhysicalReg::Zero), MachineOperand::blockLabel(trueLabel)});
+	return true;
+}
+
 void InstructionSelector::translateBranch(const IRInstView & inst)
 {
 	if (!inst.isConditionalBranch()) {
@@ -1326,7 +1411,9 @@ void InstructionSelector::translateBranch(const IRInstView & inst)
 	auto * cmpInst = dynamic_cast<ICmpInst *>(inst.operand(0).raw());
 	const bool canFuseCmpBranch =
 		blockContainsInstruction(currentIRBlock, cmpInst) || isOnlyUsedByConditionalBranches(cmpInst);
-	if (canFuseCmpBranch && cmpInst != nullptr && cmpInst->getOperandsNum() == 2) {
+	if (canFuseCmpBranch && tryEmitModuloZeroBranch(cmpInst, trueLabel)) {
+		// Branch emitted by the modulo-zero fast path.
+	} else if (canFuseCmpBranch && cmpInst != nullptr && cmpInst->getOperandsNum() == 2) {
 		auto lhs = loadBranchOperand(IRValueView(cmpInst->getOperand(0)));
 		auto rhs = loadBranchOperand(IRValueView(cmpInst->getOperand(1)));
 		MachineOpcode branchOpcode = MachineOpcode::BNE;
