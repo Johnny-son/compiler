@@ -22,6 +22,7 @@
 #include "RuntimeMemoizePass.h"
 #include "SimplifyCFGPass.h"
 #include "SingleStoreAllocaPass.h"
+#include "TailCallOptPass.h"
 #include "TrivialPhiPass.h"
 #include "VerifyPass.h"
 #include "BackendDriver.h"
@@ -248,6 +249,8 @@ static int compile(string inputFile, string outputFile)
 			passManager.addPass<InlineSimpleFunctionPass>();
 			passManager.addPass<VerifyPass>();
 			passManager.addPass<RuntimeMemoizePass>();
+			passManager.addPass<VerifyPass>();
+			passManager.addPass<TailCallOptPass>();
 			passManager.addPass<VerifyPass>();
 			passManager.addPass<ConstantFoldPass>();
 			passManager.addPass<VerifyPass>();
