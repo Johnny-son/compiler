@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "BasicBlock.h"
@@ -35,6 +36,24 @@ std::string typeKey(Type * type)
 	return std::to_string(reinterpret_cast<std::uintptr_t>(type));
 }
 
+bool isCommutativeBinary(BinaryInst::Op op)
+{
+	return op == BinaryInst::Op::Add || op == BinaryInst::Op::Mul;
+}
+
+bool isCommutativeICmp(ICmpInst::Predicate predicate)
+{
+	return predicate == ICmpInst::Predicate::EQ || predicate == ICmpInst::Predicate::NE;
+}
+
+std::pair<Value *, Value *> orderedOperands(Value * lhs, Value * rhs)
+{
+	if (valueKey(rhs) < valueKey(lhs)) {
+		return {rhs, lhs};
+	}
+	return {lhs, rhs};
+}
+
 std::string instructionKey(Instruction * inst)
 {
 	if (inst == nullptr || inst->isTerminator() || !inst->hasResultValue()) {
@@ -42,12 +61,18 @@ std::string instructionKey(Instruction * inst)
 	}
 
 	if (auto * binary = dynamic_cast<BinaryInst *>(inst); binary != nullptr && binary->getOperandsNum() == 2) {
+		auto operands = isCommutativeBinary(binary->getBinaryOp())
+			? orderedOperands(binary->getOperand(0), binary->getOperand(1))
+			: std::make_pair(binary->getOperand(0), binary->getOperand(1));
 		return "bin:" + std::to_string(static_cast<int>(binary->getBinaryOp())) + ":" + typeKey(binary->getType()) +
-			   ":" + valueKey(binary->getOperand(0)) + ":" + valueKey(binary->getOperand(1));
+			   ":" + valueKey(operands.first) + ":" + valueKey(operands.second);
 	}
 	if (auto * icmp = dynamic_cast<ICmpInst *>(inst); icmp != nullptr && icmp->getOperandsNum() == 2) {
-		return "icmp:" + std::to_string(static_cast<int>(icmp->getPredicate())) + ":" + valueKey(icmp->getOperand(0)) +
-			   ":" + valueKey(icmp->getOperand(1));
+		auto operands = isCommutativeICmp(icmp->getPredicate())
+			? orderedOperands(icmp->getOperand(0), icmp->getOperand(1))
+			: std::make_pair(icmp->getOperand(0), icmp->getOperand(1));
+		return "icmp:" + std::to_string(static_cast<int>(icmp->getPredicate())) +
+			   ":" + valueKey(operands.first) + ":" + valueKey(operands.second);
 	}
 	if (auto * fcmp = dynamic_cast<FCmpInst *>(inst); fcmp != nullptr && fcmp->getOperandsNum() == 2) {
 		return "fcmp:" + std::to_string(static_cast<int>(fcmp->getPredicate())) + ":" + valueKey(fcmp->getOperand(0)) +
