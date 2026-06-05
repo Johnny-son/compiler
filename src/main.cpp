@@ -2,6 +2,7 @@
 #include <string>
 #include <getopt.h>
 #include "Status.h"
+#include "ADCEPass.h"
 #include "AST.h"
 #include "ASTGenerator.h"
 #include "Graph.h"
@@ -283,6 +284,8 @@ static int compile(string inputFile, string outputFile)
 			passManager.addPass<DLEPass>();
 			passManager.addPass<VerifyPass>();
 			passManager.addPass<DSEPass>();
+			passManager.addPass<VerifyPass>();
+			passManager.addPass<ADCEPass>();
 			passManager.addPass<VerifyPass>();
 			passManager.addPass<DCEPass>();
 			passManager.addPass<VerifyPass>();
