@@ -18,6 +18,7 @@
 #include "LocalCSEPass.h"
 #include "LocalStoreForwardPass.h"
 #include "Mem2RegPass.h"
+#include "LoopClosedFormPass.h"
 #include "RuntimeMemoizePass.h"
 #include "SimplifyCFGPass.h"
 #include "SingleStoreAllocaPass.h"
@@ -265,6 +266,10 @@ static int compile(string inputFile, string outputFile)
 			passManager.addPass<SimplifyCFGPass>();
 			passManager.addPass<VerifyPass>();
 			passManager.addPass<LoopCanonicalizePass>();
+			passManager.addPass<VerifyPass>();
+			passManager.addPass<LoopClosedFormPass>();
+			passManager.addPass<VerifyPass>();
+			passManager.addPass<SimplifyCFGPass>();
 			passManager.addPass<VerifyPass>();
 			passManager.addPass<LICMPass>();
 			passManager.addPass<VerifyPass>();
