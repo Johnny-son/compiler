@@ -26,6 +26,7 @@
 #include "TailCallOptPass.h"
 #include "TrivialPhiPass.h"
 #include "VerifyPass.h"
+#include "WriteOnlyGlobalStoreElimPass.h"
 #include "BackendDriver.h"
 
 using namespace std;
@@ -284,6 +285,8 @@ static int compile(string inputFile, string outputFile)
 			passManager.addPass<DLEPass>();
 			passManager.addPass<VerifyPass>();
 			passManager.addPass<DSEPass>();
+			passManager.addPass<VerifyPass>();
+			passManager.addPass<WriteOnlyGlobalStoreElimPass>();
 			passManager.addPass<VerifyPass>();
 			passManager.addPass<ADCEPass>();
 			passManager.addPass<VerifyPass>();
