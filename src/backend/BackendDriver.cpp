@@ -13,6 +13,7 @@
 #include "GraphColoringRegisterAllocator.h"
 #include "IRAdapter.h"
 #include "InstructionSelector.h"
+#include "MachineLocalCSE.h"
 #include "MachineAsmLowering.h"
 #include "Module.h"
 #include "Type.h"
@@ -242,6 +243,8 @@ bool BackendDriver::run(Module * module, const std::string & outputFile) const
 		FunctionFrameLayout layout = FrameLayoutBuilder::build(function);
 		InstructionSelector selector(function, layout);
 		MachineFunction machineFunction = selector.run();
+		MachineLocalCSE localCSE;
+		localCSE.run(machineFunction);
 		GraphColoringRegisterAllocator allocator;
 		if (!allocator.run(machineFunction, layout)) {
 			fclose(fp);
