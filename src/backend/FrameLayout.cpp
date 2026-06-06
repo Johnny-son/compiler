@@ -1,15 +1,10 @@
 #include "FrameLayout.h"
 
 #include <algorithm>
-#include <cstddef>
-#include <unordered_map>
-#include <unordered_set>
-#include <vector>
 
 #include "Function.h"
 #include "Type.h"
 #include "AllocaInst.h"
-#include "PhiInst.h"
 
 namespace {
 
@@ -90,128 +85,6 @@ void appendValueSlot(FunctionFrameLayout & layout, const IRValueView & value, in
 	slot.size = size;
 	slot.align = align;
 	layout.addSlot(slot);
-}
-
-bool isReusableInstructionResult(const IRInstView & inst)
-{
-	return inst.hasResult() && dynamic_cast<AllocaInst *>(inst.raw()) == nullptr;
-}
-
-void rememberLastUse(
-	std::unordered_map<Value *, std::size_t> & lastUse,
-	const std::unordered_map<Value *, BasicBlock *> & defBlock,
-	std::unordered_set<Value *> & escapingValues,
-	const IRValueView & value,
-	BasicBlock * useBlock,
-	std::size_t instIndex)
-{
-	if (!value.isInstructionResult() || dynamic_cast<AllocaInst *>(value.raw()) != nullptr) {
-		return;
-	}
-	auto defIter = defBlock.find(value.raw());
-	if (defIter == defBlock.end() || defIter->second != useBlock) {
-		escapingValues.insert(value.raw());
-		return;
-	}
-	lastUse[value.raw()] = instIndex;
-}
-
-struct ReusableSlot {
-	int32_t offset = 0;
-	int32_t size = 0;
-	std::size_t end = 0;
-};
-
-void appendReusableInstructionResultSlots(FunctionFrameLayout & layout, IRFunctionView function, int32_t & cursor)
-{
-	std::vector<std::pair<IRInstView, BasicBlock *>> insts;
-	std::unordered_map<Value *, BasicBlock *> defBlock;
-	std::unordered_map<BasicBlock *, std::size_t> blockEnd;
-	std::unordered_map<Value *, std::size_t> lastUse;
-	std::unordered_set<Value *> escapingValues;
-
-	for (const auto & block: function.blocks()) {
-		const auto blockInsts = block.instructions();
-		for (const auto & inst: blockInsts) {
-			if (isReusableInstructionResult(inst)) {
-				defBlock.insert({inst.result().raw(), block.raw()});
-			}
-			insts.push_back({inst, block.raw()});
-		}
-		if (!blockInsts.empty()) {
-			blockEnd[block.raw()] = insts.size() - 1;
-		}
-	}
-
-	for (std::size_t index = 0; index < insts.size(); ++index) {
-		const auto & inst = insts[index].first;
-		BasicBlock * block = insts[index].second;
-		for (const auto & operand: inst.operands()) {
-			rememberLastUse(lastUse, defBlock, escapingValues, operand, block, index);
-		}
-
-		auto * phi = dynamic_cast<PhiInst *>(inst.raw());
-		if (phi == nullptr) {
-			continue;
-		}
-		for (const auto & incoming: phi->getIncomingValues()) {
-			BasicBlock * predecessor = incoming.second;
-			auto endIter = blockEnd.find(predecessor);
-			const std::size_t edgeUseIndex = endIter != blockEnd.end() ? endIter->second : index;
-			rememberLastUse(lastUse, defBlock, escapingValues, IRValueView(incoming.first), predecessor, edgeUseIndex);
-		}
-	}
-
-	std::vector<ReusableSlot> reusableSlots;
-	for (std::size_t index = 0; index < insts.size(); ++index) {
-		const auto & inst = insts[index].first;
-		if (!isReusableInstructionResult(inst)) {
-			continue;
-		}
-
-		const IRValueView value = inst.result();
-		const int32_t size = slotSizeForValue(value);
-		std::size_t end = index;
-		auto lastUseIter = lastUse.find(value.raw());
-		if (lastUseIter != lastUse.end()) {
-			end = lastUseIter->second;
-		}
-
-		int reusableIndex = -1;
-		int32_t bestSize = 0;
-		for (std::size_t slotIndex = 0; slotIndex < reusableSlots.size(); ++slotIndex) {
-			const auto & candidate = reusableSlots[slotIndex];
-			if (candidate.end >= index || candidate.size < size) {
-				continue;
-			}
-			if (reusableIndex < 0 || candidate.size < bestSize) {
-				reusableIndex = static_cast<int>(slotIndex);
-				bestSize = candidate.size;
-			}
-		}
-
-		StackSlotInfo slot;
-		slot.kind = kindForValue(value);
-		slot.value = value.raw();
-		slot.name = debugNameForValue(value);
-		slot.size = size;
-		slot.align = FunctionFrameLayout::stackSlotSize;
-
-		if (escapingValues.find(value.raw()) != escapingValues.end()) {
-			cursor = alignTo(cursor + size, slot.align);
-			slot.offset = -cursor;
-		} else if (reusableIndex >= 0) {
-			auto & reused = reusableSlots[static_cast<std::size_t>(reusableIndex)];
-			reused.end = end;
-			slot.offset = reused.offset;
-		} else {
-			cursor = alignTo(cursor + size, slot.align);
-			slot.offset = -cursor;
-			reusableSlots.push_back(ReusableSlot{slot.offset, size, end});
-		}
-
-		layout.addSlot(slot);
-	}
 }
 
 } // namespace
@@ -344,17 +217,11 @@ FunctionFrameLayout FrameLayoutBuilder::build(IRFunctionView function)
 
 	int32_t cursor = FunctionFrameLayout::savedAreaSize;
 
-	for (const auto & param: function.params()) {
-		appendValueSlot(layout, param, cursor);
-	}
-
 	for (const auto & inst: function.instructions()) {
 		if (dynamic_cast<AllocaInst *>(inst.raw()) != nullptr) {
 			appendValueSlot(layout, inst.result(), cursor);
 		}
 	}
-
-	appendReusableInstructionResultSlots(layout, function, cursor);
 
 	const int32_t maxCallArgCount = function.raw()->getMaxFuncCallArgCnt();
 	int32_t outgoingAreaSize = 0;

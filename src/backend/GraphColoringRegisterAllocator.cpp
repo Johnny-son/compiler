@@ -64,6 +64,33 @@ const PhysicalReg allocatableFPRs[] = {
 	PhysicalReg::FT9,
 	PhysicalReg::FT10,
 	PhysicalReg::FT11,
+	PhysicalReg::FS0,
+	PhysicalReg::FS1,
+	PhysicalReg::FS2,
+	PhysicalReg::FS3,
+	PhysicalReg::FS4,
+	PhysicalReg::FS5,
+	PhysicalReg::FS6,
+	PhysicalReg::FS7,
+	PhysicalReg::FS8,
+	PhysicalReg::FS9,
+	PhysicalReg::FS10,
+	PhysicalReg::FS11,
+};
+
+const PhysicalReg calleeSavedFPRs[] = {
+	PhysicalReg::FS0,
+	PhysicalReg::FS1,
+	PhysicalReg::FS2,
+	PhysicalReg::FS3,
+	PhysicalReg::FS4,
+	PhysicalReg::FS5,
+	PhysicalReg::FS6,
+	PhysicalReg::FS7,
+	PhysicalReg::FS8,
+	PhysicalReg::FS9,
+	PhysicalReg::FS10,
+	PhysicalReg::FS11,
 };
 
 std::vector<PhysicalReg> allocatableRegsFor(RegisterClass regClass)
@@ -79,17 +106,32 @@ std::vector<PhysicalReg> calleeSavedRegsFor(RegisterClass regClass)
 	if (regClass == RegisterClass::GPR) {
 		return std::vector<PhysicalReg>(std::begin(calleeSavedGPRs), std::end(calleeSavedGPRs));
 	}
-	return {};
+	return std::vector<PhysicalReg>(std::begin(calleeSavedFPRs), std::end(calleeSavedFPRs));
 }
 
-bool isCalleeSavedGPR(PhysicalReg reg)
+bool isCalleeSavedReg(PhysicalReg reg)
 {
 	for (PhysicalReg calleeSaved: calleeSavedGPRs) {
 		if (calleeSaved == reg) {
 			return true;
 		}
 	}
+	for (PhysicalReg calleeSaved: calleeSavedFPRs) {
+		if (calleeSaved == reg) {
+			return true;
+		}
+	}
 	return false;
+}
+
+bool isFPR(PhysicalReg reg)
+{
+	for (PhysicalReg candidate: allocatableFPRs) {
+		if (candidate == reg) {
+			return true;
+		}
+	}
+	return reg >= PhysicalReg::FA0 && reg <= PhysicalReg::FS11;
 }
 
 MachineOpcode spillLoadOpcode(RegisterClass regClass)
@@ -271,11 +313,7 @@ InterferenceGraph buildInterferenceGraph(const MachineFunction & function, const
 
 			if (inst.opcode == MachineOpcode::CALL) {
 				for (int32_t live: info.liveOut) {
-					if (classOf(function, live) == RegisterClass::GPR) {
-						graph.callLive.insert(live);
-					} else {
-						graph.mustSpill.insert(live);
-					}
+					graph.callLive.insert(live);
 				}
 			}
 		}
@@ -637,17 +675,22 @@ void applyAssignment(MachineFunction & function, const std::unordered_map<int32_
 	}
 }
 
-std::vector<PhysicalReg> usedCalleeSavedGPRs(const std::unordered_map<int32_t, PhysicalReg> & assignment)
+std::vector<PhysicalReg> usedCalleeSavedRegs(const std::unordered_map<int32_t, PhysicalReg> & assignment)
 {
 	std::set<PhysicalReg> used;
 	for (const auto & entry: assignment) {
-		if (isCalleeSavedGPR(entry.second)) {
+		if (isCalleeSavedReg(entry.second)) {
 			used.insert(entry.second);
 		}
 	}
 
 	std::vector<PhysicalReg> ordered;
 	for (PhysicalReg reg: calleeSavedGPRs) {
+		if (used.find(reg) != used.end()) {
+			ordered.push_back(reg);
+		}
+	}
+	for (PhysicalReg reg: calleeSavedFPRs) {
 		if (used.find(reg) != used.end()) {
 			ordered.push_back(reg);
 		}
@@ -715,8 +758,9 @@ void insertCalleeSavedPrologue(MachineFunction & function, const std::map<Physic
 	std::vector<MachineInstr> saves;
 	saves.reserve(slots.size());
 	for (const auto & entry: slots) {
+		const MachineOpcode opcode = isFPR(entry.first) ? MachineOpcode::FSW : MachineOpcode::SD;
 		saves.push_back(MachineInstr::make(
-			MachineOpcode::SD,
+			opcode,
 			{MachineOperand::pregUse(entry.first), MachineOperand::spillSlotOperand(entry.second)}));
 	}
 	instructions.insert(insertPos, saves.begin(), saves.end());
@@ -731,8 +775,9 @@ void insertCalleeSavedEpilogues(MachineFunction & function, const std::map<Physi
 	std::vector<MachineInstr> restores;
 	restores.reserve(slots.size());
 	for (auto iter = slots.rbegin(); iter != slots.rend(); ++iter) {
+		const MachineOpcode opcode = isFPR(iter->first) ? MachineOpcode::FLW : MachineOpcode::LD;
 		restores.push_back(MachineInstr::make(
-			MachineOpcode::LD,
+			opcode,
 			{MachineOperand::pregDef(iter->first), MachineOperand::spillSlotOperand(iter->second)}));
 	}
 
@@ -752,7 +797,7 @@ void preserveCalleeSavedRegisters(
 	FunctionFrameLayout & layout,
 	const std::unordered_map<int32_t, PhysicalReg> & assignment)
 {
-	const auto used = usedCalleeSavedGPRs(assignment);
+	const auto used = usedCalleeSavedRegs(assignment);
 	if (used.empty()) {
 		return;
 	}

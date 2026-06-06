@@ -517,6 +517,30 @@ const char * TargetRegisterInfo::name(PhysicalReg reg)
 			return "ft10";
 		case PhysicalReg::FT11:
 			return "ft11";
+		case PhysicalReg::FS0:
+			return "fs0";
+		case PhysicalReg::FS1:
+			return "fs1";
+		case PhysicalReg::FS2:
+			return "fs2";
+		case PhysicalReg::FS3:
+			return "fs3";
+		case PhysicalReg::FS4:
+			return "fs4";
+		case PhysicalReg::FS5:
+			return "fs5";
+		case PhysicalReg::FS6:
+			return "fs6";
+		case PhysicalReg::FS7:
+			return "fs7";
+		case PhysicalReg::FS8:
+			return "fs8";
+		case PhysicalReg::FS9:
+			return "fs9";
+		case PhysicalReg::FS10:
+			return "fs10";
+		case PhysicalReg::FS11:
+			return "fs11";
 		default:
 			return "<invalid>";
 	}

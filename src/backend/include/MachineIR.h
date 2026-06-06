@@ -65,7 +65,19 @@ enum class PhysicalReg : std::int16_t {
 	FT8,
 	FT9,
 	FT10,
-	FT11
+	FT11,
+	FS0,
+	FS1,
+	FS2,
+	FS3,
+	FS4,
+	FS5,
+	FS6,
+	FS7,
+	FS8,
+	FS9,
+	FS10,
+	FS11
 };
 
 enum class MachineOpcode : std::int16_t {

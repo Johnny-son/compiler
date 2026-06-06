@@ -1,9 +1,7 @@
 #pragma once
 
-#include <optional>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 
 #include "FrameLayout.h"
 #include "MachineIR.h"
@@ -61,14 +59,10 @@ private:
 	bool tryEmitModuloZeroBranch(ICmpInst * cmp, const std::string & trueLabel);
 	MachineOperand newVRegDef(RegisterClass regClass = RegisterClass::GPR);
 	MachineOperand newVRegDef(Type * type);
-	MachineOperand loadValue(const IRValueView & value);
-	void loadValueTo(const IRValueView & value, const MachineOperand & dst);
-	void storeValue(const MachineOperand & src, const IRValueView & value);
-	[[nodiscard]] std::optional<MachineOperand> cachedValue(const IRValueView & value) const;
-	bool rememberValue(Value * value, const MachineOperand & operand);
+	MachineOperand useValue(const IRValueView & value);
+	void copyValueTo(const IRValueView & value, const MachineOperand & dst);
+	void defineValue(const IRValueView & value, const MachineOperand & src);
 	RecognizedHelperKind classifyHelper(Function * callee);
-	[[nodiscard]] bool isLocalOnlyValue(const IRValueView & value) const;
-	[[nodiscard]] bool isDefinedInCurrentBlock(const IRValueView & value) const;
 	void storeZeroInitializer(const IRValueView & ptr, Type * valueType);
 	void loadAddress(const IRValueView & value, const MachineOperand & dst);
 	void loadFromPointer(const IRValueView & ptr, Type * valueType, const MachineOperand & dst);
@@ -91,17 +85,10 @@ private:
 	const FunctionFrameLayout & frameLayout;
 	MachineFunction machineFunction;
 	std::unordered_map<BasicBlock *, std::string> blockLabels;
-	std::unordered_map<Value *, BasicBlock *> valueBlocks;
-	std::unordered_set<Value *> localOnlyValues;
-	std::unordered_set<Value *> localValuesUsedAfterCall;
-	std::unordered_set<Value *> crossBlockBranchCompareOperands;
-	std::unordered_set<BasicBlock *> callBlocks;
-	std::unordered_map<Value *, MachineOperand> localValueCache;
+	std::unordered_map<Value *, MachineOperand> valueRegs;
 	std::unordered_map<std::string, MachineOperand> gepPrefixCache;
 	std::unordered_map<Value *, MachineOperand> phiValueRegs;
 	std::unordered_map<Function *, RecognizedHelperKind> helperKindCache;
 	BasicBlock * currentIRBlock = nullptr;
-	bool localValueCacheEnabled = true;
-	bool localFprValueCacheEnabled = false;
 	int nextLabelIndex = 0;
 };
