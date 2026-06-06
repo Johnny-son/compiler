@@ -14,6 +14,7 @@
 #include "IRAdapter.h"
 #include "InstructionSelector.h"
 #include "MachineDCE.h"
+#include "MachineInstCombine.h"
 #include "MachineLocalCSE.h"
 #include "MachineAsmLowering.h"
 #include "Module.h"
@@ -246,6 +247,8 @@ bool BackendDriver::run(Module * module, const std::string & outputFile) const
 		MachineFunction machineFunction = selector.run();
 		MachineLocalCSE localCSE;
 		localCSE.run(machineFunction);
+		MachineInstCombine instCombine;
+		instCombine.run(machineFunction);
 		MachineDCE machineDCE;
 		machineDCE.run(machineFunction);
 		GraphColoringRegisterAllocator allocator;
