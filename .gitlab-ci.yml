@@ -1,0 +1,32 @@
+stages:
+  - mirror
+
+mirror_to_github:
+  stage: mirror
+  image: alpine:3.20
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push"'
+  variables:
+    GIT_DEPTH: "0"
+  before_script:
+    - apk add --no-cache git
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+    - git remote remove github 2>/dev/null || true
+    - git remote add github "https://x-access-token:${GITHUB_TOKEN}@github.com/Johnny-son/compiler.git"
+  script:
+    - git fetch origin '+refs/heads/*:refs/remotes/origin/*' --prune
+    - |
+      git for-each-ref --format='%(refname:strip=3)' refs/remotes/origin | while IFS= read -r branch; do
+        [ "$branch" = "HEAD" ] && continue
+        git push github "refs/remotes/origin/${branch}:refs/heads/${branch}" --force
+      done
+    - git push github --tags --force
+    - |
+      git ls-remote --heads github | awk '{print $2}' | sed 's#refs/heads/##' > /tmp/github-branches
+      git for-each-ref --format='%(refname:strip=3)' refs/remotes/origin | grep -v '^HEAD$' > /tmp/gitlab-branches
+      while IFS= read -r branch; do
+        [ -z "$branch" ] && continue
+        if ! grep -Fxq "$branch" /tmp/gitlab-branches; then
+          git push github --delete "$branch"
+        fi
+      done < /tmp/github-branches
