@@ -142,9 +142,11 @@ MachineOperand MachineLegalizer::materializeImmediate(
 	std::vector<MachineInstr> & output,
 	int64_t value) const
 {
-	MachineOperand tmp = MachineOperand::vregDef(function.createVirtualReg(RegisterClass::GPR));
-	output.push_back(MachineInstr::make(MachineOpcode::LI, {tmp, MachineOperand::immValue(value)}));
-	return tmp.asUse();
+	(void) function;
+	output.push_back(MachineInstr::make(
+		MachineOpcode::LI,
+		{MachineOperand::pregDef(PhysicalReg::T0), MachineOperand::immValue(value)}));
+	return MachineOperand::pregUse(PhysicalReg::T0);
 }
 
 MachineOperand MachineLegalizer::materializeAddress(
@@ -154,9 +156,10 @@ MachineOperand MachineLegalizer::materializeAddress(
 	int64_t offset) const
 {
 	MachineOperand offsetReg = materializeImmediate(function, output, offset);
-	MachineOperand address = MachineOperand::vregDef(function.createVirtualReg(RegisterClass::GPR));
-	output.push_back(MachineInstr::make(MachineOpcode::ADD, {address, base.asUse(), offsetReg}));
-	return address.asUse();
+	output.push_back(MachineInstr::make(
+		MachineOpcode::ADD,
+		{MachineOperand::pregDef(PhysicalReg::T0), base.asUse(), offsetReg}));
+	return MachineOperand::pregUse(PhysicalReg::T0);
 }
 
 MachineOperand MachineLegalizer::legalizeMemoryOperand(
@@ -184,6 +187,9 @@ MachineOperand MachineLegalizer::legalizeMemoryOperand(
 	}
 
 	MachineOperand address = materializeAddress(function, output, base, offset);
+	if (address.kind == MachineOperandKind::PhysicalReg) {
+		return MachineOperand::mem(address.preg, 0);
+	}
 	return MachineOperand::memVReg(address.vreg, 0);
 }
 

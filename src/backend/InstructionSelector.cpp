@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -131,6 +132,11 @@ bool absModuloTwoDivisor(int32_t value, int32_t & absValue)
 	return absValue == 2;
 }
 
+int64_t alignTo(int64_t value, int64_t alignment)
+{
+	return (value + alignment - 1) / alignment * alignment;
+}
+
 bool isOnlyUsedByConditionalBranches(Instruction * inst)
 {
 	if (inst == nullptr || inst->getUseList().empty()) {
@@ -185,6 +191,8 @@ bool readI32Value(Value * value, const std::unordered_map<Value *, int32_t> & va
 	return true;
 }
 
+constexpr int pureI32EvalStepLimit = 1000000;
+
 bool evalPureI32Function(Function * callee, const std::vector<int32_t> & args, int32_t & result, int depth = 0)
 {
 	if (callee == nullptr || callee->isBuiltin() || callee->getReturnType() == nullptr ||
@@ -201,6 +209,7 @@ bool evalPureI32Function(Function * callee, const std::vector<int32_t> & args, i
 	}
 
 	std::unordered_map<Value *, int32_t> values;
+	std::unordered_map<Value *, int32_t> memory;
 	for (std::size_t index = 0; index < params.size(); ++index) {
 		if (params[index] == nullptr || params[index]->getType() == nullptr || !params[index]->getType()->isInt32Type()) {
 			return false;
@@ -211,7 +220,7 @@ bool evalPureI32Function(Function * callee, const std::vector<int32_t> & args, i
 	BasicBlock * block = callee->getEntryBlock();
 	BasicBlock * predecessor = nullptr;
 	int steps = 0;
-	while (block != nullptr && steps++ < 5000) {
+	while (block != nullptr && steps++ < pureI32EvalStepLimit) {
 		const auto & instructions = block->getInstructions();
 		std::vector<std::pair<Value *, int32_t>> phiWrites;
 		std::size_t firstNonPhi = 0;
@@ -245,7 +254,7 @@ bool evalPureI32Function(Function * callee, const std::vector<int32_t> & args, i
 		bool jumped = false;
 		for (std::size_t index = firstNonPhi; index < instructions.size(); ++index) {
 			auto * inst = instructions[index];
-			if (inst == nullptr || steps++ >= 5000) {
+			if (inst == nullptr || steps++ >= pureI32EvalStepLimit) {
 				return false;
 			}
 
@@ -339,6 +348,33 @@ bool evalPureI32Function(Function * callee, const std::vector<int32_t> & args, i
 					return false;
 				}
 				values[cast] = value;
+				continue;
+			}
+
+			if (auto * alloca = dynamic_cast<AllocaInst *>(inst); alloca != nullptr) {
+				if (alloca->getAllocatedType() == nullptr || !alloca->getAllocatedType()->isInt32Type()) {
+					return false;
+				}
+				memory[alloca] = 0;
+				continue;
+			}
+
+			if (auto * store = dynamic_cast<StoreInst *>(inst); store != nullptr) {
+				int32_t stored = 0;
+				Value * pointer = store->getPointerOperand();
+				if (!readI32Value(store->getValueOperand(), values, stored) || memory.find(pointer) == memory.end()) {
+					return false;
+				}
+				memory[pointer] = stored;
+				continue;
+			}
+
+			if (auto * load = dynamic_cast<LoadInst *>(inst); load != nullptr) {
+				auto iter = memory.find(load->getPointerOperand());
+				if (iter == memory.end() || load->getType() == nullptr || !load->getType()->isInt32Type()) {
+					return false;
+				}
+				values[load] = iter->second;
 				continue;
 			}
 
@@ -537,11 +573,25 @@ void InstructionSelector::translateEntry()
 	std::size_t stackIndex = 0;
 	for (const auto & param: params) {
 		if (regClassForType(param.type()) == RegisterClass::FPR && fprIndex < FunctionFrameLayout::argRegCount) {
-			defineValue(param, MachineOperand::pregUse(REG_FA[fprIndex++]));
+			auto dst = newVRegDef(param.type());
+			auto copy = MachineInstr::make(MachineOpcode::COPY, {dst.asDef(), MachineOperand::pregUse(REG_FA[fprIndex])});
+			for (std::size_t index = fprIndex + 1; index < FunctionFrameLayout::argRegCount; ++index) {
+				copy.implicitDefs.push_back(REG_FA[index]);
+			}
+			machineFunction.currentBlock()->emit(copy);
+			defineValue(param, dst.asUse());
+			++fprIndex;
 			continue;
 		}
 		if (regClassForType(param.type()) == RegisterClass::GPR && gprIndex < FunctionFrameLayout::argRegCount) {
-			defineValue(param, MachineOperand::pregUse(REG_A[gprIndex++]));
+			auto dst = newVRegDef(param.type());
+			auto copy = MachineInstr::make(MachineOpcode::COPY, {dst.asDef(), MachineOperand::pregUse(REG_A[gprIndex])});
+			for (std::size_t index = gprIndex + 1; index < FunctionFrameLayout::argRegCount; ++index) {
+				copy.implicitDefs.push_back(REG_A[index]);
+			}
+			machineFunction.currentBlock()->emit(copy);
+			defineValue(param, dst.asUse());
+			++gprIndex;
 			continue;
 		}
 		const int64_t callerArgOffset = static_cast<int64_t>(stackIndex++ * FunctionFrameLayout::stackSlotSize);
@@ -947,6 +997,32 @@ void InstructionSelector::translateGEP(const IRInstView & inst)
 
 void InstructionSelector::translateCall(const IRInstView & inst)
 {
+	if (inst.hasResult() && inst.type() != nullptr && inst.type()->isInt32Type()) {
+		auto * callInst = dynamic_cast<CallInst *>(inst.raw());
+		Function * callee = callInst != nullptr ? callInst->getCallee() : nullptr;
+		if (callee != nullptr && !callee->isBuiltin()) {
+			std::vector<int32_t> constantArgs;
+			constantArgs.reserve(inst.operandCount());
+			bool allConstantInt = true;
+			for (std::size_t index = 0; index < inst.operandCount(); ++index) {
+				const IRValueView operand = inst.operand(index);
+				if (!operand.isConstantInt()) {
+					allConstantInt = false;
+					break;
+				}
+				constantArgs.push_back(operand.intValue());
+			}
+
+			int32_t folded = 0;
+			if (allConstantInt && evalPureI32Function(callee, constantArgs, folded)) {
+				auto result = newVRegDef(inst.type());
+				machineFunction.emit(MachineOpcode::LI, {result, MachineOperand::immValue(folded)});
+				defineValue(inst.result(), result.asUse());
+				return;
+			}
+		}
+	}
+
 	if (translateRecognizedHelperCall(inst)) {
 		return;
 	}
@@ -955,23 +1031,114 @@ void InstructionSelector::translateCall(const IRInstView & inst)
 	std::size_t gprIndex = 0;
 	std::size_t fprIndex = 0;
 	std::size_t stackIndex = 0;
+	struct RegisterArg {
+		PhysicalReg reg;
+		MachineOperand value;
+		Type * type = nullptr;
+	};
+	struct StagedRegisterArg {
+		PhysicalReg reg;
+		Type * type = nullptr;
+		int64_t offset = 0;
+	};
+	std::vector<RegisterArg> registerArgs;
+
+	auto registerForArg = [&](Type * type) -> std::optional<PhysicalReg> {
+		if (regClassForType(type) == RegisterClass::FPR && fprIndex < FunctionFrameLayout::argRegCount) {
+			return REG_FA[fprIndex++];
+		}
+		if (regClassForType(type) == RegisterClass::GPR && gprIndex < FunctionFrameLayout::argRegCount) {
+			return REG_A[gprIndex++];
+		}
+		return std::nullopt;
+	};
 
 	for (std::size_t index = 0; index < argCount; ++index) {
-		auto arg = useValue(inst.operand(index));
-		if (regClassForType(inst.operand(index).type()) == RegisterClass::FPR && fprIndex < FunctionFrameLayout::argRegCount) {
-			machineFunction.emit(MachineOpcode::COPY, {MachineOperand::pregDef(REG_FA[fprIndex++]), arg.asUse()});
-			continue;
-		}
-		if (regClassForType(inst.operand(index).type()) == RegisterClass::GPR && gprIndex < FunctionFrameLayout::argRegCount) {
-			machineFunction.emit(MachineOpcode::COPY, {MachineOperand::pregDef(REG_A[gprIndex++]), arg.asUse()});
-			continue;
-		}
+		(void) registerForArg(inst.operand(index).type());
+	}
+	const std::size_t stackArgCount = argCount - gprIndex - fprIndex;
+	const bool useStackStaging = argCount > FunctionFrameLayout::argRegCount && frameLayout.outgoingArgAreaSize() > 0;
+	const int64_t callAreaSize = useStackStaging
+		? alignTo(static_cast<int64_t>(argCount * FunctionFrameLayout::stackSlotSize), 16)
+		: 0;
+
+	gprIndex = 0;
+	fprIndex = 0;
+	auto adjustStackPointer = [&](int64_t amount) {
 		machineFunction.emit(
-			storeOpcode(inst.operand(index).type()),
-			{arg.asUse(),
-			 MachineOperand::mem(
-				 PhysicalReg::SP,
-				 static_cast<int64_t>(stackIndex++ * FunctionFrameLayout::stackSlotSize))});
+			MachineOpcode::LI,
+			{MachineOperand::pregDef(PhysicalReg::T0), MachineOperand::immValue(amount)});
+		machineFunction.emit(
+			MachineOpcode::ADD,
+			{MachineOperand::pregDef(PhysicalReg::SP),
+			 MachineOperand::pregUse(PhysicalReg::SP),
+			 MachineOperand::pregUse(PhysicalReg::T0)});
+	};
+
+	if (useStackStaging) {
+		adjustStackPointer(-callAreaSize);
+
+		std::vector<StagedRegisterArg> stagedRegisterArgs;
+		stagedRegisterArgs.reserve(argCount - stackArgCount);
+		std::size_t regStageIndex = 0;
+		stackIndex = 0;
+
+		for (std::size_t index = 0; index < argCount; ++index) {
+			const IRValueView operand = inst.operand(index);
+			auto arg = useValue(operand);
+			auto argReg = registerForArg(operand.type());
+			if (argReg.has_value()) {
+				const int64_t stageOffset = static_cast<int64_t>(
+					(stackArgCount + regStageIndex++) * FunctionFrameLayout::stackSlotSize);
+				machineFunction.emit(
+					storeOpcode(operand.type()),
+					{arg.asUse(), MachineOperand::mem(PhysicalReg::SP, stageOffset)});
+				stagedRegisterArgs.push_back(StagedRegisterArg{*argReg, operand.type(), stageOffset});
+				continue;
+			}
+
+			machineFunction.emit(
+				storeOpcode(operand.type()),
+				{arg.asUse(),
+				 MachineOperand::mem(
+					 PhysicalReg::SP,
+					 static_cast<int64_t>(stackIndex++ * FunctionFrameLayout::stackSlotSize))});
+		}
+
+		for (const auto & registerArg: stagedRegisterArgs) {
+			machineFunction.emit(
+				loadOpcode(registerArg.type),
+				{MachineOperand::pregDef(registerArg.reg), MachineOperand::mem(PhysicalReg::SP, registerArg.offset)});
+		}
+	} else {
+		stackIndex = 0;
+		for (std::size_t index = 0; index < argCount; ++index) {
+			const IRValueView operand = inst.operand(index);
+			auto arg = useValue(operand);
+			auto argReg = registerForArg(operand.type());
+			if (argReg.has_value()) {
+				auto tmp = newVRegDef(operand.type());
+				machineFunction.emit(MachineOpcode::COPY, {tmp.asDef(), arg.asUse()});
+				registerArgs.push_back(RegisterArg{*argReg, tmp.asUse(), operand.type()});
+				continue;
+			}
+			machineFunction.emit(
+				storeOpcode(operand.type()),
+				{arg.asUse(),
+				 MachineOperand::mem(
+					 PhysicalReg::SP,
+					 static_cast<int64_t>(stackIndex++ * FunctionFrameLayout::stackSlotSize))});
+		}
+
+		for (std::size_t index = 0; index < registerArgs.size(); ++index) {
+			auto copy = MachineInstr::make(
+				MachineOpcode::COPY,
+				{MachineOperand::pregDef(registerArgs[index].reg), registerArgs[index].value.asUse()});
+			for (std::size_t later = index + 1; later < registerArgs.size(); ++later) {
+				copy.implicitDefs.push_back(registerArgs[later].reg);
+			}
+			machineFunction.currentBlock()->emit(copy);
+		}
 	}
 
 	auto call = MachineInstr::make(MachineOpcode::CALL, {MachineOperand::functionSymbol(inst.calledFunctionName())});
@@ -1014,6 +1181,10 @@ void InstructionSelector::translateCall(const IRInstView & inst)
 		PhysicalReg::FT11,
 	};
 	machineFunction.currentBlock()->emit(call);
+
+	if (callAreaSize > 0) {
+		adjustStackPointer(callAreaSize);
+	}
 
 	if (inst.hasResult()) {
 		const PhysicalReg returnReg = regClassForType(inst.type()) == RegisterClass::FPR ? PhysicalReg::FA0 : PhysicalReg::A0;
@@ -1355,20 +1526,20 @@ void InstructionSelector::translateReturn(const IRInstView & inst)
 		return;
 	}
 
-	auto oldFp = newVRegDef();
 	machineFunction.emit(
 		MachineOpcode::LD,
 		{MachineOperand::pregDef(PhysicalReg::RA),
 		 MachineOperand::mem(PhysicalReg::FP, FunctionFrameLayout::savedRaOffset)});
 	machineFunction.emit(
 		MachineOpcode::LD,
-		{oldFp, MachineOperand::mem(PhysicalReg::FP, FunctionFrameLayout::savedFpOffset)});
+		{MachineOperand::pregDef(PhysicalReg::T0),
+		 MachineOperand::mem(PhysicalReg::FP, FunctionFrameLayout::savedFpOffset)});
 	machineFunction.emit(
 		MachineOpcode::COPY,
 		{MachineOperand::pregDef(PhysicalReg::SP), MachineOperand::pregUse(PhysicalReg::FP)});
 	machineFunction.emit(
 		MachineOpcode::COPY,
-		{MachineOperand::pregDef(PhysicalReg::FP), oldFp.asUse()});
+		{MachineOperand::pregDef(PhysicalReg::FP), MachineOperand::pregUse(PhysicalReg::T0)});
 	machineFunction.emit(MachineOpcode::RET);
 }
 

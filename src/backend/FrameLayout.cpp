@@ -226,7 +226,7 @@ FunctionFrameLayout FrameLayoutBuilder::build(IRFunctionView function)
 	const int32_t maxCallArgCount = function.raw()->getMaxFuncCallArgCnt();
 	int32_t outgoingAreaSize = 0;
 	if (maxCallArgCount > FunctionFrameLayout::argRegCount) {
-		outgoingAreaSize = (maxCallArgCount - FunctionFrameLayout::argRegCount) * FunctionFrameLayout::stackSlotSize;
+		outgoingAreaSize = maxCallArgCount * FunctionFrameLayout::stackSlotSize;
 		outgoingAreaSize = alignTo(outgoingAreaSize, FunctionFrameLayout::stackSlotSize);
 
 		cursor = alignTo(cursor + outgoingAreaSize, FunctionFrameLayout::stackSlotSize);

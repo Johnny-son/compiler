@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -17,6 +18,14 @@ namespace {
 constexpr int maxIterations = 128;
 
 const PhysicalReg allocatableGPRs[] = {
+	PhysicalReg::A0,
+	PhysicalReg::A1,
+	PhysicalReg::A2,
+	PhysicalReg::A3,
+	PhysicalReg::A4,
+	PhysicalReg::A5,
+	PhysicalReg::A6,
+	PhysicalReg::A7,
 	PhysicalReg::T0,
 	PhysicalReg::T1,
 	PhysicalReg::T2,
@@ -52,6 +61,14 @@ const PhysicalReg calleeSavedGPRs[] = {
 };
 
 const PhysicalReg allocatableFPRs[] = {
+	PhysicalReg::FA0,
+	PhysicalReg::FA1,
+	PhysicalReg::FA2,
+	PhysicalReg::FA3,
+	PhysicalReg::FA4,
+	PhysicalReg::FA5,
+	PhysicalReg::FA6,
+	PhysicalReg::FA7,
 	PhysicalReg::FT0,
 	PhysicalReg::FT1,
 	PhysicalReg::FT2,
@@ -149,6 +166,7 @@ struct InterferenceGraph {
 	std::map<int32_t, std::set<int32_t>> affinities;
 	std::map<int32_t, RegisterClass> classes;
 	std::map<int32_t, std::set<PhysicalReg>> forbiddenColors;
+	std::map<int32_t, double> spillCosts;
 	std::set<int32_t> mustSpill;
 	std::set<int32_t> callLive;
 
@@ -198,6 +216,12 @@ struct InterferenceGraph {
 		auto iter = neighbors.find(vreg);
 		return iter == neighbors.end() ? 0 : static_cast<int>(iter->second.size());
 	}
+
+	double spillCost(int32_t vreg) const
+	{
+		auto iter = spillCosts.find(vreg);
+		return iter == spillCosts.end() ? 1.0 : std::max(iter->second, 1.0);
+	}
 };
 
 struct ColoringResult {
@@ -231,6 +255,57 @@ void collectPhysicalDefs(const MachineInstr & inst, std::set<PhysicalReg> & defs
 		}
 	}
 	defs.insert(inst.implicitDefs.begin(), inst.implicitDefs.end());
+}
+
+std::vector<int> estimateLoopDepths(const MachineFunction & function)
+{
+	std::vector<int> depths(function.blocks().size(), 0);
+	for (MachineBlockIndex from = 0; from < function.blocks().size(); ++from) {
+		for (MachineBlockIndex to: function.blocks()[from].successors()) {
+			if (to > from) {
+				continue;
+			}
+			for (MachineBlockIndex index = to; index <= from && index < depths.size(); ++index) {
+				++depths[index];
+			}
+		}
+	}
+	return depths;
+}
+
+double blockWeight(int loopDepth)
+{
+	double weight = 1.0;
+	const int cappedDepth = std::min(loopDepth, 6);
+	for (int depth = 0; depth < cappedDepth; ++depth) {
+		weight *= 10.0;
+	}
+	return weight;
+}
+
+void addOperandSpillCost(const MachineOperand & operand, double weight, InterferenceGraph & graph)
+{
+	if (operand.kind == MachineOperandKind::VirtualReg) {
+		graph.spillCosts[operand.vreg] += weight;
+		return;
+	}
+
+	if (operand.kind == MachineOperandKind::Memory && !operand.memoryBaseIsPhysical) {
+		graph.spillCosts[operand.memoryBaseVReg] += weight;
+	}
+}
+
+void collectSpillCosts(const MachineFunction & function, InterferenceGraph & graph)
+{
+	const auto loopDepths = estimateLoopDepths(function);
+	for (MachineBlockIndex blockIndex = 0; blockIndex < function.blocks().size(); ++blockIndex) {
+		const double weight = blockWeight(loopDepths[blockIndex]);
+		for (const auto & inst: function.blocks()[blockIndex].instructions()) {
+			for (const auto & operand: inst.operands) {
+				addOperandSpillCost(operand, weight, graph);
+			}
+		}
+	}
 }
 
 int32_t copySourceForDef(const MachineInstr & inst, int32_t def)
@@ -319,6 +394,7 @@ InterferenceGraph buildInterferenceGraph(const MachineFunction & function, const
 		}
 	}
 
+	collectSpillCosts(function, graph);
 	return graph;
 }
 
@@ -367,19 +443,70 @@ std::vector<PhysicalReg> candidateRegsFor(int32_t vreg, const InterferenceGraph 
 	return filtered;
 }
 
-int32_t highestCurrentDegreeNode(const std::set<int32_t> & nodes, const std::map<int32_t, int> & degrees)
+int32_t lowestSpillPriorityNode(
+	const std::set<int32_t> & nodes,
+	const std::map<int32_t, int> & degrees,
+	const InterferenceGraph & graph)
 {
 	int32_t best = -1;
+	double bestPriority = std::numeric_limits<double>::infinity();
 	int bestDegree = -1;
 	for (int32_t node: nodes) {
-		auto iter = degrees.find(node);
-		const int degree = iter == degrees.end() ? 0 : iter->second;
-		if (degree > bestDegree || (degree == bestDegree && (best < 0 || node < best))) {
+		auto degreeIter = degrees.find(node);
+		const int degree = std::max(1, degreeIter == degrees.end() ? graph.degree(node) : degreeIter->second);
+		const double priority = graph.spillCost(node) / static_cast<double>(degree);
+		if (priority < bestPriority ||
+			(priority == bestPriority && (degree > bestDegree || (degree == bestDegree && (best < 0 || node < best))))) {
 			best = node;
+			bestPriority = priority;
 			bestDegree = degree;
 		}
 	}
 	return best;
+}
+
+std::vector<int32_t> spillBatchForColoringFailure(const InterferenceGraph & graph, int32_t primary)
+{
+	std::vector<int32_t> batch;
+	if (primary >= 0) {
+		batch.push_back(primary);
+	}
+
+	const std::size_t nodeCount = graph.neighbors.size();
+	if (nodeCount < 200) {
+		return batch;
+	}
+
+	std::vector<int32_t> candidates;
+	candidates.reserve(nodeCount);
+	for (const auto & entry: graph.neighbors) {
+		if (entry.first != primary) {
+			candidates.push_back(entry.first);
+		}
+	}
+
+	std::sort(candidates.begin(), candidates.end(), [&graph](int32_t lhs, int32_t rhs) {
+		const int lhsDegree = std::max(1, graph.degree(lhs));
+		const int rhsDegree = std::max(1, graph.degree(rhs));
+		const double lhsPriority = graph.spillCost(lhs) / static_cast<double>(lhsDegree);
+		const double rhsPriority = graph.spillCost(rhs) / static_cast<double>(rhsDegree);
+		if (lhsPriority != rhsPriority) {
+			return lhsPriority < rhsPriority;
+		}
+		if (lhsDegree != rhsDegree) {
+			return lhsDegree > rhsDegree;
+		}
+		return lhs < rhs;
+	});
+
+	const std::size_t targetSize = std::min<std::size_t>(32, std::max<std::size_t>(4, nodeCount / 32));
+	for (int32_t candidate: candidates) {
+		if (batch.size() >= targetSize) {
+			break;
+		}
+		batch.push_back(candidate);
+	}
+	return batch;
 }
 
 ColoringResult colorGraph(const InterferenceGraph & graph)
@@ -408,7 +535,7 @@ ColoringResult colorGraph(const InterferenceGraph & graph)
 			selected = lowDegreeNodes.begin()->second;
 			lowDegreeNodes.erase(lowDegreeNodes.begin());
 		} else {
-			selected = highestCurrentDegreeNode(remaining, degrees);
+			selected = lowestSpillPriorityNode(remaining, degrees, graph);
 		}
 
 		selectStack.push_back(selected);
@@ -867,7 +994,7 @@ bool GraphColoringRegisterAllocator::run(MachineFunction & function, FunctionFra
 			if (frameFinalized) {
 				return false;
 			}
-			rewriteSpill(function, layout, coloring.spillCandidate);
+			rewriteSpills(function, layout, spillBatchForColoringFailure(graph, coloring.spillCandidate));
 			frameFinalized = false;
 			continue;
 		}
