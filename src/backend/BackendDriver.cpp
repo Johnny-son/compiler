@@ -10,9 +10,9 @@
 
 #include "Asm.h"
 #include "FrameLayout.h"
-#include "GraphColoringRegisterAllocator.h"
 #include "IRAdapter.h"
 #include "InstructionSelector.h"
+#include "IteratedRegisterCoalescingAllocator.h"
 #include "MachineDCE.h"
 #include "MachineInstCombine.h"
 #include "MachineLocalCSE.h"
@@ -252,7 +252,7 @@ bool BackendDriver::run(Module * module, const std::string & outputFile) const
 		instCombine.run(machineFunction);
 		MachineDCE machineDCE;
 		machineDCE.run(machineFunction);
-		GraphColoringRegisterAllocator allocator;
+		IteratedRegisterCoalescingAllocator allocator;
 		if (!allocator.run(machineFunction, layout)) {
 			fclose(fp);
 			return false;
