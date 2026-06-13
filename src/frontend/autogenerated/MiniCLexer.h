@@ -12,14 +12,14 @@
 class  MiniCLexer : public antlr4::Lexer {
 public:
   enum {
-    T_L_PAREN = 1, T_R_PAREN = 2, T_SEMICOLON = 3, T_L_BRACE = 4, T_R_BRACE = 5,
-    T_L_BRACKET = 6, T_R_BRACKET = 7, T_ASSIGN = 8, T_COMMA = 9, T_INC = 10,
-    T_DEC = 11, T_EQ = 12, T_NE = 13, T_LE = 14, T_GE = 15, T_LT = 16, T_GT = 17,
-    T_LAND = 18, T_LOR = 19, T_ADD = 20, T_SUB = 21, T_MUL = 22, T_DIV = 23,
-    T_MOD = 24, T_NOT = 25, T_IF = 26, T_ELSE = 27, T_WHILE = 28, T_FOR = 29,
-    T_BREAK = 30, T_CONTINUE = 31, T_RETURN = 32, T_INT = 33, T_FLOAT = 34,
-    T_CONST = 35, T_STATIC = 36, T_VOID = 37, T_ID = 38, T_STRING_LITERAL = 39,
-    T_FLOAT_LITERAL = 40, T_DIGIT = 41, LINE_COMMENT = 42, BLOCK_COMMENT = 43,
+    T_L_PAREN = 1, T_R_PAREN = 2, T_SEMICOLON = 3, T_L_BRACE = 4, T_R_BRACE = 5, 
+    T_L_BRACKET = 6, T_R_BRACKET = 7, T_ASSIGN = 8, T_COMMA = 9, T_INC = 10, 
+    T_DEC = 11, T_EQ = 12, T_NE = 13, T_LE = 14, T_GE = 15, T_LT = 16, T_GT = 17, 
+    T_LAND = 18, T_LOR = 19, T_ADD = 20, T_SUB = 21, T_MUL = 22, T_DIV = 23, 
+    T_MOD = 24, T_NOT = 25, T_IF = 26, T_ELSE = 27, T_WHILE = 28, T_FOR = 29, 
+    T_BREAK = 30, T_CONTINUE = 31, T_RETURN = 32, T_INT = 33, T_FLOAT = 34, 
+    T_CONST = 35, T_STATIC = 36, T_VOID = 37, T_ID = 38, T_STRING_LITERAL = 39, 
+    T_FLOAT_LITERAL = 40, T_DIGIT = 41, LINE_COMMENT = 42, BLOCK_COMMENT = 43, 
     WS = 44
   };
 

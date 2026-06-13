@@ -16,6 +16,7 @@
 #include "MachineDCE.h"
 #include "MachineInstCombine.h"
 #include "MachineLocalCSE.h"
+#include "MachinePostRACleanup.h"
 #include "MachineAsmLowering.h"
 #include "Module.h"
 #include "Type.h"
@@ -256,6 +257,8 @@ bool BackendDriver::run(Module * module, const std::string & outputFile) const
 			fclose(fp);
 			return false;
 		}
+		MachinePostRACleanup postRACleanup;
+		postRACleanup.run(machineFunction);
 		MachineAsmLowering lowering(machineFunction, layout);
 		AsmFunction asmFunction = lowering.run();
 		auto * func = dynamic_cast<Function *>(function.raw());
