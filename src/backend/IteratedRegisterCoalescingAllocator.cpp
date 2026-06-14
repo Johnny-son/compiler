@@ -5,11 +5,15 @@
 #include "MachineLiveness.h"
 
 #include <algorithm>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iterator>
 #include <limits>
 #include <map>
 #include <optional>
 #include <set>
+#include <sstream>
 #include <tuple>
 #include <unordered_map>
 #include <utility>
@@ -19,6 +23,7 @@ namespace {
 
 constexpr int maxIterations = 128;
 constexpr std::size_t maxSpillBatchSize = 8;
+constexpr const char * defaultDebugDir = "/home/ubuntu/桌面/compiler-workspace/debug";
 
 const PhysicalReg allocatableGPRs[] = {
 	PhysicalReg::A0,
@@ -307,6 +312,31 @@ struct IRCState {
 	std::map<IRCNode, double> spillCosts;
 };
 
+struct RADebugIteration {
+	int iteration = 0;
+	std::size_t blocks = 0;
+	std::size_t instructions = 0;
+	std::size_t virtualRegs = 0;
+	std::size_t initialNodes = 0;
+	std::size_t interferenceEdges = 0;
+	std::size_t moveCount = 0;
+	bool colored = false;
+	std::vector<int32_t> spilledVRegs;
+};
+
+struct RADebugContext {
+	bool enabled = false;
+	std::filesystem::path dir;
+	std::vector<RADebugIteration> iterations;
+	std::vector<PhysicalReg> savedCalleeRegs;
+	std::vector<PhysicalReg> finalCalleeRegs;
+	std::unordered_map<int32_t, PhysicalReg> finalAssignment;
+	bool success = false;
+	bool verifyOk = false;
+	bool hitIterationLimit = false;
+	std::string failureReason;
+};
+
 std::pair<IRCNode, IRCNode> orderedEdge(IRCNode lhs, IRCNode rhs)
 {
 	if (rhs < lhs) {
@@ -330,6 +360,135 @@ RegisterClass classOf(const IRCState & state, IRCNode node)
 int colorCountFor(const IRCState & state, IRCNode node)
 {
 	return static_cast<int>(allocatableRegsFor(classOf(state, node)).size());
+}
+
+bool debugEnabledByEnv()
+{
+	const char * dir = std::getenv("MINIC_BACKEND_RA_DEBUG_DIR");
+	if (dir != nullptr && dir[0] != '\0') {
+		return true;
+	}
+	const char * enabled = std::getenv("MINIC_BACKEND_RA_DEBUG");
+	return enabled != nullptr && enabled[0] != '\0' && std::string(enabled) != "0";
+}
+
+std::filesystem::path debugDirFromEnv()
+{
+	const char * dir = std::getenv("MINIC_BACKEND_RA_DEBUG_DIR");
+	if (dir != nullptr && dir[0] != '\0') {
+		return std::filesystem::path(dir);
+	}
+	return std::filesystem::path(defaultDebugDir);
+}
+
+std::string safeFileName(std::string name)
+{
+	if (name.empty()) {
+		return "function";
+	}
+	for (char & ch: name) {
+		const bool ok = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') ||
+						ch == '_' || ch == '-' || ch == '.';
+		if (!ok) {
+			ch = '_';
+		}
+	}
+	return name;
+}
+
+std::string joinRegs(const std::vector<PhysicalReg> & regs)
+{
+	if (regs.empty()) {
+		return "-";
+	}
+	std::ostringstream out;
+	for (std::size_t index = 0; index < regs.size(); ++index) {
+		if (index != 0) {
+			out << " ";
+		}
+		out << TargetRegisterInfo::name(regs[index]);
+	}
+	return out.str();
+}
+
+std::string joinVRegs(const std::vector<int32_t> & vregs)
+{
+	if (vregs.empty()) {
+		return "-";
+	}
+	std::ostringstream out;
+	for (std::size_t index = 0; index < vregs.size(); ++index) {
+		if (index != 0) {
+			out << " ";
+		}
+		out << "%" << vregs[index];
+	}
+	return out.str();
+}
+
+std::size_t instructionCount(const MachineFunction & function)
+{
+	std::size_t count = 0;
+	for (const auto & block: function.blocks()) {
+		count += block.instructions().size();
+	}
+	return count;
+}
+
+std::size_t maxReferencedVirtualReg(const MachineFunction & function)
+{
+	int32_t maxVReg = -1;
+	for (const auto & block: function.blocks()) {
+		for (const auto & inst: block.instructions()) {
+			for (const auto & operand: inst.operands) {
+				if (operand.kind == MachineOperandKind::VirtualReg) {
+					maxVReg = std::max(maxVReg, operand.vreg);
+				} else if (operand.kind == MachineOperandKind::Memory && !operand.memoryBaseIsPhysical) {
+					maxVReg = std::max(maxVReg, operand.memoryBaseVReg);
+				}
+			}
+		}
+	}
+	return maxVReg < 0 ? 0 : static_cast<std::size_t>(maxVReg + 1);
+}
+
+std::size_t spillSlotCount(const FunctionFrameLayout & layout)
+{
+	std::size_t count = 0;
+	for (const auto & slot: layout.slots()) {
+		if (slot.kind == StackObjectKind::SpillSlot) {
+			++count;
+		}
+	}
+	return count;
+}
+
+void countFinalOpcodes(
+	const MachineFunction & function,
+	std::map<MachineOpcode, std::size_t> & opcodeCounts,
+	std::size_t & memoryOps,
+	std::size_t & copies)
+{
+	for (const auto & block: function.blocks()) {
+		for (const auto & inst: block.instructions()) {
+			++opcodeCounts[inst.opcode];
+			switch (inst.opcode) {
+				case MachineOpcode::LW:
+				case MachineOpcode::LD:
+				case MachineOpcode::FLW:
+				case MachineOpcode::SW:
+				case MachineOpcode::SD:
+				case MachineOpcode::FSW:
+					++memoryOps;
+					break;
+				case MachineOpcode::COPY:
+					++copies;
+					break;
+				default:
+					break;
+			}
+		}
+	}
 }
 
 double spillCost(const IRCState & state, IRCNode node)
@@ -989,6 +1148,143 @@ std::vector<PhysicalReg> usedCalleeSavedRegs(const std::unordered_map<int32_t, P
 	return ordered;
 }
 
+bool sameRegSet(const std::vector<PhysicalReg> & lhs, const std::vector<PhysicalReg> & rhs)
+{
+	return std::set<PhysicalReg>(lhs.begin(), lhs.end()) == std::set<PhysicalReg>(rhs.begin(), rhs.end());
+}
+
+std::string opcodeDebugName(MachineOpcode opcode)
+{
+	switch (opcode) {
+		case MachineOpcode::ADDI: return "ADDI";
+		case MachineOpcode::ADDIW: return "ADDIW";
+		case MachineOpcode::ADD: return "ADD";
+		case MachineOpcode::ADDW: return "ADDW";
+		case MachineOpcode::SUBW: return "SUBW";
+		case MachineOpcode::MUL: return "MUL";
+		case MachineOpcode::MULW: return "MULW";
+		case MachineOpcode::REM: return "REM";
+		case MachineOpcode::DIVW: return "DIVW";
+		case MachineOpcode::REMW: return "REMW";
+		case MachineOpcode::SLLI: return "SLLI";
+		case MachineOpcode::AND: return "AND";
+		case MachineOpcode::OR: return "OR";
+		case MachineOpcode::XOR: return "XOR";
+		case MachineOpcode::SLT: return "SLT";
+		case MachineOpcode::XORI: return "XORI";
+		case MachineOpcode::ANDI: return "ANDI";
+		case MachineOpcode::SEQZ: return "SEQZ";
+		case MachineOpcode::SNEZ: return "SNEZ";
+		case MachineOpcode::LI: return "LI";
+		case MachineOpcode::LA: return "LA";
+		case MachineOpcode::LA_STACK: return "LA_STACK";
+		case MachineOpcode::LW: return "LW";
+		case MachineOpcode::LD: return "LD";
+		case MachineOpcode::FLW: return "FLW";
+		case MachineOpcode::SW: return "SW";
+		case MachineOpcode::SD: return "SD";
+		case MachineOpcode::FSW: return "FSW";
+		case MachineOpcode::FADD_S: return "FADD_S";
+		case MachineOpcode::FSUB_S: return "FSUB_S";
+		case MachineOpcode::FMUL_S: return "FMUL_S";
+		case MachineOpcode::FDIV_S: return "FDIV_S";
+		case MachineOpcode::FEQ_S: return "FEQ_S";
+		case MachineOpcode::FLT_S: return "FLT_S";
+		case MachineOpcode::FLE_S: return "FLE_S";
+		case MachineOpcode::FCVT_S_W: return "FCVT_S_W";
+		case MachineOpcode::FCVT_W_S: return "FCVT_W_S";
+		case MachineOpcode::FMV_W_X: return "FMV_W_X";
+		case MachineOpcode::FMV_X_W: return "FMV_X_W";
+		case MachineOpcode::COPY: return "COPY";
+		case MachineOpcode::CALL: return "CALL";
+		case MachineOpcode::J: return "J";
+		case MachineOpcode::BEQ: return "BEQ";
+		case MachineOpcode::BNE: return "BNE";
+		case MachineOpcode::BLT: return "BLT";
+		case MachineOpcode::BGE: return "BGE";
+		case MachineOpcode::BNEZ: return "BNEZ";
+		case MachineOpcode::RET: return "RET";
+		default:
+			return std::to_string(static_cast<int>(opcode));
+	}
+}
+
+std::filesystem::path nextDebugPath(
+	const std::filesystem::path & dir,
+	const std::string & debugTag,
+	const std::string & functionName)
+{
+	const std::string base = debugTag.empty() ? safeFileName(functionName) : safeFileName(debugTag + "." + functionName);
+	auto path = dir / (base + ".ra.txt");
+	if (!std::filesystem::exists(path)) {
+		return path;
+	}
+	for (int index = 1; index < 100000; ++index) {
+		path = dir / (base + "." + std::to_string(index) + ".ra.txt");
+		if (!std::filesystem::exists(path)) {
+			return path;
+		}
+	}
+	return dir / (base + ".overflow.ra.txt");
+}
+
+void writeRADebugReport(
+	const MachineFunction & function,
+	const FunctionFrameLayout & layout,
+	const RADebugContext & debug,
+	const std::string & debugTag)
+{
+	if (!debug.enabled) {
+		return;
+	}
+
+	std::error_code error;
+	std::filesystem::create_directories(debug.dir, error);
+	if (error) {
+		return;
+	}
+
+	const auto path = nextDebugPath(debug.dir, debugTag, function.name());
+	std::ofstream out(path);
+	if (!out) {
+		return;
+	}
+
+	std::map<MachineOpcode, std::size_t> opcodeCounts;
+	std::size_t memoryOps = 0;
+	std::size_t copies = 0;
+	countFinalOpcodes(function, opcodeCounts, memoryOps, copies);
+
+	out << "function: " << function.name() << "\n";
+	out << "success: " << (debug.success ? "yes" : "no") << "\n";
+	out << "verify_no_virtual_regs: " << (debug.verifyOk ? "yes" : "no") << "\n";
+	out << "hit_iteration_limit: " << (debug.hitIterationLimit ? "yes" : "no") << "\n";
+	if (!debug.failureReason.empty()) {
+		out << "failure_reason: " << debug.failureReason << "\n";
+	}
+	out << "iterations: " << debug.iterations.size() << "\n";
+	out << "final_blocks: " << function.blocks().size() << "\n";
+	out << "final_instructions: " << instructionCount(function) << "\n";
+	out << "final_referenced_vregs: " << maxReferencedVirtualReg(function) << "\n";
+	out << "frame_size: " << layout.frameSize() << "\n";
+	out << "spill_slots: " << spillSlotCount(layout) << "\n";
+	out << "saved_callee_regs: " << joinRegs(debug.savedCalleeRegs) << "\n";
+	out << "final_callee_regs: " << joinRegs(debug.finalCalleeRegs) << "\n";
+	out << "callee_saved_match: " << (sameRegSet(debug.savedCalleeRegs, debug.finalCalleeRegs) ? "yes" : "no") << "\n";
+	out << "final_memory_ops: " << memoryOps << "\n";
+	out << "final_copy_ops: " << copies << "\n";
+	out << "\niteration,blocks,instructions,referenced_vregs,initial_nodes,edges,moves,colored,spilled\n";
+	for (const auto & iter: debug.iterations) {
+		out << iter.iteration << "," << iter.blocks << "," << iter.instructions << "," << iter.virtualRegs << ","
+			<< iter.initialNodes << "," << iter.interferenceEdges << "," << iter.moveCount << ","
+			<< (iter.colored ? "yes" : "no") << "," << joinVRegs(iter.spilledVRegs) << "\n";
+	}
+	out << "\nopcode_counts:\n";
+	for (const auto & entry: opcodeCounts) {
+		out << opcodeDebugName(entry.first) << " " << entry.second << "\n";
+	}
+}
+
 bool isFramePointerSetup(const MachineInstr & inst)
 {
 	return inst.opcode == MachineOpcode::ADDI && inst.operands.size() >= 3 &&
@@ -1117,10 +1413,17 @@ bool verifyNoVirtualRegs(const MachineFunction & function)
 
 } // namespace
 
+IteratedRegisterCoalescingAllocator::IteratedRegisterCoalescingAllocator(std::string debugTag)
+	: debugTag(std::move(debugTag))
+{}
+
 bool IteratedRegisterCoalescingAllocator::run(MachineFunction & function, FunctionFrameLayout & layout) const
 {
 	MachineLegalizer legalizer(layout);
 	bool frameFinalized = false;
+	RADebugContext debug;
+	debug.enabled = debugEnabledByEnv();
+	debug.dir = debugDirFromEnv();
 
 	for (int iteration = 0; iteration < maxIterations; ++iteration) {
 		legalizer.run(function, true);
@@ -1133,13 +1436,37 @@ bool IteratedRegisterCoalescingAllocator::run(MachineFunction & function, Functi
 		IRCState state = buildIRCState(function, liveness);
 		runWorklists(state);
 		const bool colored = assignColors(state);
+		if (debug.enabled) {
+			RADebugIteration record;
+			record.iteration = iteration;
+			record.blocks = function.blocks().size();
+			record.instructions = instructionCount(function);
+			record.virtualRegs = maxReferencedVirtualReg(function);
+			record.initialNodes = state.classes.size();
+			record.interferenceEdges = state.adjSet.size();
+			record.moveCount = state.moves.size();
+			record.colored = colored;
+			for (IRCNode node: state.spilledNodes) {
+				if (node.isVirtual()) {
+					record.spilledVRegs.push_back(node.vreg);
+				}
+			}
+			debug.iterations.push_back(std::move(record));
+		}
 		if (!colored) {
 			if (frameFinalized) {
+				debug.failureReason = "coloring failed after frame finalization";
+				writeRADebugReport(function, layout, debug, debugTag);
 				return false;
 			}
 			const auto spilledVRegs = spillBatch(state);
 			if (spilledVRegs.empty()) {
+				debug.failureReason = "coloring failed without spill candidates";
+				writeRADebugReport(function, layout, debug, debugTag);
 				return false;
+			}
+			if (debug.enabled && !debug.iterations.empty()) {
+				debug.iterations.back().spilledVRegs = spilledVRegs;
 			}
 			rewriteSpills(function, layout, spilledVRegs);
 			frameFinalized = false;
@@ -1148,6 +1475,7 @@ bool IteratedRegisterCoalescingAllocator::run(MachineFunction & function, Functi
 
 		auto assignment = exportAssignment(state);
 		if (!frameFinalized) {
+			debug.savedCalleeRegs = usedCalleeSavedRegs(assignment);
 			preserveCalleeSavedRegisters(function, layout, assignment);
 			rewriteFrameSetup(function, layout);
 			legalizer.run(function, false);
@@ -1155,9 +1483,20 @@ bool IteratedRegisterCoalescingAllocator::run(MachineFunction & function, Functi
 			continue;
 		}
 
+		debug.finalAssignment = assignment;
+		debug.finalCalleeRegs = usedCalleeSavedRegs(assignment);
 		applyAssignment(function, assignment);
-		return verifyNoVirtualRegs(function);
+		debug.verifyOk = verifyNoVirtualRegs(function);
+		debug.success = debug.verifyOk;
+		if (!debug.verifyOk) {
+			debug.failureReason = "virtual registers remain after assignment";
+		}
+		writeRADebugReport(function, layout, debug, debugTag);
+		return debug.verifyOk;
 	}
 
+	debug.hitIterationLimit = true;
+	debug.failureReason = "hit RA iteration limit";
+	writeRADebugReport(function, layout, debug, debugTag);
 	return false;
 }

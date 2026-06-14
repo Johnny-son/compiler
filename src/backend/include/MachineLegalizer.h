@@ -19,6 +19,9 @@ private:
 		MachineFunction & function,
 		std::vector<MachineInstr> & output,
 		const MachineInstr & inst) const;
+	void legalizeFrameSetupInstruction(
+		std::vector<MachineInstr> & output,
+		const MachineInstr & inst) const;
 	void legalizeAddi(MachineFunction & function, std::vector<MachineInstr> & output, const MachineInstr & inst) const;
 	void legalizeLaStack(
 		MachineFunction & function,
@@ -35,6 +38,11 @@ private:
 		int64_t value) const;
 	MachineOperand materializeAddress(
 		MachineFunction & function,
+		std::vector<MachineInstr> & output,
+		const MachineOperand & base,
+		int64_t offset) const;
+	MachineOperand materializeImmediateInScratch(std::vector<MachineInstr> & output, int64_t value) const;
+	MachineOperand materializeAddressInScratch(
 		std::vector<MachineInstr> & output,
 		const MachineOperand & base,
 		int64_t offset) const;

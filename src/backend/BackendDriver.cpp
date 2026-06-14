@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -173,6 +174,15 @@ void emitWords(FILE * fp, const std::vector<uint32_t> & words)
 	}
 }
 
+std::string debugTagFromOutputFile(const std::string & outputFile)
+{
+	if (outputFile.empty()) {
+		return "";
+	}
+	std::filesystem::path path(outputFile);
+	return path.stem().string();
+}
+
 } // namespace
 
 bool BackendDriver::run(Module * module, const std::string & outputFile) const
@@ -252,7 +262,7 @@ bool BackendDriver::run(Module * module, const std::string & outputFile) const
 		instCombine.run(machineFunction);
 		MachineDCE machineDCE;
 		machineDCE.run(machineFunction);
-		IteratedRegisterCoalescingAllocator allocator;
+		IteratedRegisterCoalescingAllocator allocator(debugTagFromOutputFile(outputFile));
 		if (!allocator.run(machineFunction, layout)) {
 			fclose(fp);
 			return false;

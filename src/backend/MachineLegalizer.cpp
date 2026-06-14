@@ -62,6 +62,11 @@ void MachineLegalizer::legalizeInstruction(
 	std::vector<MachineInstr> & output,
 	const MachineInstr & inst) const
 {
+	if (isFrameSetupInstruction(inst)) {
+		legalizeFrameSetupInstruction(output, inst);
+		return;
+	}
+
 	if (inst.opcode == MachineOpcode::ADDI) {
 		legalizeAddi(function, output, inst);
 		return;
@@ -74,6 +79,45 @@ void MachineLegalizer::legalizeInstruction(
 
 	if (isMemoryOpcode(inst.opcode)) {
 		legalizeMemoryInstruction(function, output, inst);
+		return;
+	}
+
+	output.push_back(inst);
+}
+
+void MachineLegalizer::legalizeFrameSetupInstruction(
+	std::vector<MachineInstr> & output,
+	const MachineInstr & inst) const
+{
+	if (inst.opcode == MachineOpcode::ADDI) {
+		if (inst.operands.size() < 3 || inst.operands[2].kind != MachineOperandKind::Immediate ||
+			isSigned12Bit(inst.operands[2].imm)) {
+			output.push_back(inst);
+			return;
+		}
+
+		MachineOperand imm = materializeImmediateInScratch(output, inst.operands[2].imm);
+		MachineInstr add = inst;
+		add.opcode = MachineOpcode::ADD;
+		add.operands[2] = imm;
+		output.push_back(add);
+		return;
+	}
+
+	if (isMemoryOpcode(inst.opcode)) {
+		MachineInstr legalized = inst;
+		for (auto & operand: legalized.operands) {
+			if (operand.kind != MachineOperandKind::Memory || !operand.memoryBaseIsPhysical ||
+				isSigned12Bit(operand.memoryOffset)) {
+				continue;
+			}
+			MachineOperand address = materializeAddressInScratch(
+				output,
+				MachineOperand::pregUse(operand.memoryBasePreg),
+				operand.memoryOffset);
+			operand = MachineOperand::mem(address.preg, 0);
+		}
+		output.push_back(legalized);
 		return;
 	}
 
@@ -128,9 +172,29 @@ void MachineLegalizer::legalizeMemoryInstruction(
 	const MachineInstr & inst) const
 {
 	MachineInstr legalized = inst;
+	bool hasPhysicalRegOperand = false;
+	for (const auto & operand: legalized.operands) {
+		if (operand.kind == MachineOperandKind::PhysicalReg) {
+			hasPhysicalRegOperand = true;
+			break;
+		}
+	}
+
 	for (auto & operand: legalized.operands) {
 		if (operand.kind == MachineOperandKind::Memory || operand.kind == MachineOperandKind::StackSlot ||
 			operand.kind == MachineOperandKind::SpillSlot) {
+			if (hasPhysicalRegOperand &&
+				(operand.kind == MachineOperandKind::StackSlot || operand.kind == MachineOperandKind::SpillSlot)) {
+				const int64_t offset = frameOperandOffset(operand);
+				if (!isSigned12Bit(offset)) {
+					MachineOperand address = materializeAddressInScratch(
+						output,
+						MachineOperand::pregUse(PhysicalReg::FP),
+						offset);
+					operand = MachineOperand::mem(address.preg, 0);
+					continue;
+				}
+			}
 			operand = legalizeMemoryOperand(function, output, operand);
 		}
 	}
@@ -142,11 +206,9 @@ MachineOperand MachineLegalizer::materializeImmediate(
 	std::vector<MachineInstr> & output,
 	int64_t value) const
 {
-	(void) function;
-	output.push_back(MachineInstr::make(
-		MachineOpcode::LI,
-		{MachineOperand::pregDef(PhysicalReg::T0), MachineOperand::immValue(value)}));
-	return MachineOperand::pregUse(PhysicalReg::T0);
+	MachineOperand tmp = MachineOperand::vregDef(function.createVirtualReg(RegisterClass::GPR));
+	output.push_back(MachineInstr::make(MachineOpcode::LI, {tmp, MachineOperand::immValue(value)}));
+	return tmp.asUse();
 }
 
 MachineOperand MachineLegalizer::materializeAddress(
@@ -156,6 +218,27 @@ MachineOperand MachineLegalizer::materializeAddress(
 	int64_t offset) const
 {
 	MachineOperand offsetReg = materializeImmediate(function, output, offset);
+	MachineOperand address = MachineOperand::vregDef(function.createVirtualReg(RegisterClass::GPR));
+	output.push_back(MachineInstr::make(MachineOpcode::ADD, {address, base.asUse(), offsetReg}));
+	return address.asUse();
+}
+
+MachineOperand MachineLegalizer::materializeImmediateInScratch(
+	std::vector<MachineInstr> & output,
+	int64_t value) const
+{
+	output.push_back(MachineInstr::make(
+		MachineOpcode::LI,
+		{MachineOperand::pregDef(PhysicalReg::T0), MachineOperand::immValue(value)}));
+	return MachineOperand::pregUse(PhysicalReg::T0);
+}
+
+MachineOperand MachineLegalizer::materializeAddressInScratch(
+	std::vector<MachineInstr> & output,
+	const MachineOperand & base,
+	int64_t offset) const
+{
+	MachineOperand offsetReg = materializeImmediateInScratch(output, offset);
 	output.push_back(MachineInstr::make(
 		MachineOpcode::ADD,
 		{MachineOperand::pregDef(PhysicalReg::T0), base.asUse(), offsetReg}));
@@ -187,9 +270,6 @@ MachineOperand MachineLegalizer::legalizeMemoryOperand(
 	}
 
 	MachineOperand address = materializeAddress(function, output, base, offset);
-	if (address.kind == MachineOperandKind::PhysicalReg) {
-		return MachineOperand::mem(address.preg, 0);
-	}
 	return MachineOperand::memVReg(address.vreg, 0);
 }
 
