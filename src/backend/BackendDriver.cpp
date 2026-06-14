@@ -5,7 +5,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <chrono>
 #include <filesystem>
+#include <iostream>
 #include <string>
 #include <vector>
 
@@ -183,6 +185,36 @@ std::string debugTagFromOutputFile(const std::string & outputFile)
 	return path.stem().string();
 }
 
+bool backendTimingEnabled()
+{
+	const char * enabled = std::getenv("MINIC_BACKEND_TIMING");
+	return enabled != nullptr && enabled[0] != '\0' && std::string(enabled) != "0";
+}
+
+class BackendStageTimer {
+
+public:
+	BackendStageTimer(bool enabled, const std::string & functionName, const char * stage)
+		: enabled(enabled), functionName(functionName), stage(stage), start(std::chrono::steady_clock::now())
+	{}
+
+	~BackendStageTimer()
+	{
+		if (!enabled) {
+			return;
+		}
+		const auto end = std::chrono::steady_clock::now();
+		const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+		std::cerr << "[backend] " << functionName << " " << stage << " " << ms << "ms\n";
+	}
+
+private:
+	bool enabled = false;
+	std::string functionName;
+	const char * stage = "";
+	std::chrono::steady_clock::time_point start;
+};
+
 } // namespace
 
 bool BackendDriver::run(Module * module, const std::string & outputFile) const
@@ -252,25 +284,54 @@ bool BackendDriver::run(Module * module, const std::string & outputFile) const
 		if (!function.valid() || function.isBuiltin()) {
 			continue;
 		}
+		const bool timingEnabled = backendTimingEnabled();
+		const std::string functionName = function.name();
 
-		FunctionFrameLayout layout = FrameLayoutBuilder::build(function);
-		InstructionSelector selector(function, layout);
-		MachineFunction machineFunction = selector.run();
-		MachineLocalCSE localCSE;
-		localCSE.run(machineFunction);
-		MachineInstCombine instCombine;
-		instCombine.run(machineFunction);
-		MachineDCE machineDCE;
-		machineDCE.run(machineFunction);
-		IteratedRegisterCoalescingAllocator allocator(debugTagFromOutputFile(outputFile));
-		if (!allocator.run(machineFunction, layout)) {
-			fclose(fp);
-			return false;
+		FunctionFrameLayout layout;
+		{
+			BackendStageTimer timer(timingEnabled, functionName, "frame-layout");
+			layout = FrameLayoutBuilder::build(function);
 		}
-		MachinePostRACleanup postRACleanup;
-		postRACleanup.run(machineFunction);
-		MachineAsmLowering lowering(machineFunction, layout);
-		AsmFunction asmFunction = lowering.run();
+		MachineFunction machineFunction;
+		{
+			BackendStageTimer timer(timingEnabled, functionName, "isel");
+			InstructionSelector selector(function, layout);
+			machineFunction = selector.run();
+		}
+		{
+			BackendStageTimer timer(timingEnabled, functionName, "local-cse");
+			MachineLocalCSE localCSE;
+			localCSE.run(machineFunction);
+		}
+		{
+			BackendStageTimer timer(timingEnabled, functionName, "inst-combine");
+			MachineInstCombine instCombine;
+			instCombine.run(machineFunction);
+		}
+		{
+			BackendStageTimer timer(timingEnabled, functionName, "dce");
+			MachineDCE machineDCE;
+			machineDCE.run(machineFunction);
+		}
+		{
+			BackendStageTimer timer(timingEnabled, functionName, "ra");
+			IteratedRegisterCoalescingAllocator allocator(debugTagFromOutputFile(outputFile));
+			if (!allocator.run(machineFunction, layout)) {
+				fclose(fp);
+				return false;
+			}
+		}
+		{
+			BackendStageTimer timer(timingEnabled, functionName, "post-ra");
+			MachinePostRACleanup postRACleanup;
+			postRACleanup.run(machineFunction);
+		}
+		AsmFunction asmFunction;
+		{
+			BackendStageTimer timer(timingEnabled, functionName, "lowering");
+			MachineAsmLowering lowering(machineFunction, layout);
+			asmFunction = lowering.run();
+		}
 		auto * func = dynamic_cast<Function *>(function.raw());
 		if (func && func->getLinkage() == GlobalValue::InternalLinkage) {
 			asmFunction.setInternalLinkage(true);

@@ -10,6 +10,7 @@ public:
 
 	void run(MachineFunction & function, bool skipFrameSetup = false) const;
 	static bool isFrameSetupInstruction(const MachineInstr & inst);
+	static bool isFrameTeardownInstruction(const MachineInstr & inst);
 
 private:
 	static bool isSigned12Bit(int64_t value);
@@ -20,6 +21,9 @@ private:
 		std::vector<MachineInstr> & output,
 		const MachineInstr & inst) const;
 	void legalizeFrameSetupInstruction(
+		std::vector<MachineInstr> & output,
+		const MachineInstr & inst) const;
+	void legalizeFrameTeardownInstruction(
 		std::vector<MachineInstr> & output,
 		const MachineInstr & inst) const;
 	void legalizeAddi(MachineFunction & function, std::vector<MachineInstr> & output, const MachineInstr & inst) const;

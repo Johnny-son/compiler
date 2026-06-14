@@ -192,6 +192,7 @@ bool readI32Value(Value * value, const std::unordered_map<Value *, int32_t> & va
 }
 
 constexpr int pureI32EvalStepLimit = 1000000;
+constexpr std::size_t pureI32EvalArgLimit = 64;
 
 bool evalPureI32Function(Function * callee, const std::vector<int32_t> & args, int32_t & result, int depth = 0)
 {
@@ -595,11 +596,7 @@ void InstructionSelector::translateEntry()
 			continue;
 		}
 		const int64_t callerArgOffset = static_cast<int64_t>(stackIndex++ * FunctionFrameLayout::stackSlotSize);
-		auto tmp = newVRegDef(param.type());
-		machineFunction.emit(
-			loadOpcode(param.type()),
-			{tmp, MachineOperand::mem(PhysicalReg::FP, callerArgOffset)});
-		defineValue(param, tmp.asUse());
+		stackParamOffsets[param.raw()] = callerArgOffset;
 	}
 }
 
@@ -997,7 +994,8 @@ void InstructionSelector::translateGEP(const IRInstView & inst)
 
 void InstructionSelector::translateCall(const IRInstView & inst)
 {
-	if (inst.hasResult() && inst.type() != nullptr && inst.type()->isInt32Type()) {
+		if (inst.hasResult() && inst.type() != nullptr && inst.type()->isInt32Type() &&
+			inst.operandCount() <= pureI32EvalArgLimit) {
 		auto * callInst = dynamic_cast<CallInst *>(inst.raw());
 		Function * callee = callInst != nullptr ? callInst->getCallee() : nullptr;
 		if (callee != nullptr && !callee->isBuiltin()) {
@@ -1589,6 +1587,10 @@ void InstructionSelector::copyValueTo(const IRValueView & value, const MachineOp
 		return;
 	}
 
+	if (loadStackParamTo(value, dst)) {
+		return;
+	}
+
 	if (value.isConstantInt()) {
 		machineFunction.emit(MachineOpcode::LI, {dst.asDef(), MachineOperand::immValue(value.intValue())});
 		return;
@@ -1631,6 +1633,23 @@ void InstructionSelector::defineValue(const IRValueView & value, const MachineOp
 	auto dst = newVRegDef(value.type());
 	machineFunction.emit(MachineOpcode::COPY, {dst.asDef(), src.asUse()});
 	valueRegs[value.raw()] = dst.asUse();
+}
+
+bool InstructionSelector::loadStackParamTo(const IRValueView & value, const MachineOperand & dst)
+{
+	if (!value.valid() || !value.isFormalParam()) {
+		return false;
+	}
+
+	auto iter = stackParamOffsets.find(value.raw());
+	if (iter == stackParamOffsets.end()) {
+		return false;
+	}
+
+	machineFunction.emit(
+		loadOpcode(value.type()),
+		{dst.asDef(), MachineOperand::mem(PhysicalReg::FP, iter->second)});
+	return true;
 }
 
 RecognizedHelperKind InstructionSelector::classifyHelper(Function * callee)

@@ -62,6 +62,7 @@ private:
 	MachineOperand useValue(const IRValueView & value);
 	void copyValueTo(const IRValueView & value, const MachineOperand & dst);
 	void defineValue(const IRValueView & value, const MachineOperand & src);
+	bool loadStackParamTo(const IRValueView & value, const MachineOperand & dst);
 	RecognizedHelperKind classifyHelper(Function * callee);
 	void storeZeroInitializer(const IRValueView & ptr, Type * valueType);
 	void loadAddress(const IRValueView & value, const MachineOperand & dst);
@@ -86,6 +87,7 @@ private:
 	MachineFunction machineFunction;
 	std::unordered_map<BasicBlock *, std::string> blockLabels;
 	std::unordered_map<Value *, MachineOperand> valueRegs;
+	std::unordered_map<Value *, int64_t> stackParamOffsets;
 	std::unordered_map<std::string, MachineOperand> gepPrefixCache;
 	std::unordered_map<Value *, MachineOperand> phiValueRegs;
 	std::unordered_map<Function *, RecognizedHelperKind> helperKindCache;

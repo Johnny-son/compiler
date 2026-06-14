@@ -6,8 +6,10 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <iterator>
 #include <limits>
 #include <map>
@@ -369,6 +371,12 @@ bool debugEnabledByEnv()
 		return true;
 	}
 	const char * enabled = std::getenv("MINIC_BACKEND_RA_DEBUG");
+	return enabled != nullptr && enabled[0] != '\0' && std::string(enabled) != "0";
+}
+
+bool timingEnabledByEnv()
+{
+	const char * enabled = std::getenv("MINIC_BACKEND_TIMING");
 	return enabled != nullptr && enabled[0] != '\0' && std::string(enabled) != "0";
 }
 
@@ -1148,6 +1156,30 @@ std::vector<PhysicalReg> usedCalleeSavedRegs(const std::unordered_map<int32_t, P
 	return ordered;
 }
 
+std::vector<PhysicalReg> missingCalleeSavedRegs(
+	const std::vector<PhysicalReg> & required,
+	const std::vector<PhysicalReg> & saved)
+{
+	std::set<PhysicalReg> savedSet(saved.begin(), saved.end());
+	std::vector<PhysicalReg> missing;
+	for (PhysicalReg reg: required) {
+		if (savedSet.find(reg) == savedSet.end()) {
+			missing.push_back(reg);
+		}
+	}
+	return missing;
+}
+
+void appendUniqueRegs(std::vector<PhysicalReg> & dst, const std::vector<PhysicalReg> & regs)
+{
+	std::set<PhysicalReg> present(dst.begin(), dst.end());
+	for (PhysicalReg reg: regs) {
+		if (present.insert(reg).second) {
+			dst.push_back(reg);
+		}
+	}
+}
+
 bool sameRegSet(const std::vector<PhysicalReg> & lhs, const std::vector<PhysicalReg> & rhs)
 {
 	return std::set<PhysicalReg>(lhs.begin(), lhs.end()) == std::set<PhysicalReg>(rhs.begin(), rhs.end());
@@ -1382,14 +1414,13 @@ void insertCalleeSavedEpilogues(MachineFunction & function, const std::map<Physi
 void preserveCalleeSavedRegisters(
 	MachineFunction & function,
 	FunctionFrameLayout & layout,
-	const std::unordered_map<int32_t, PhysicalReg> & assignment)
+	const std::vector<PhysicalReg> & regs)
 {
-	const auto used = usedCalleeSavedRegs(assignment);
-	if (used.empty()) {
+	if (regs.empty()) {
 		return;
 	}
 
-	const auto slots = createCalleeSavedSlots(layout, used);
+	const auto slots = createCalleeSavedSlots(layout, regs);
 	insertCalleeSavedPrologue(function, slots);
 	insertCalleeSavedEpilogues(function, slots);
 }
@@ -1421,21 +1452,46 @@ bool IteratedRegisterCoalescingAllocator::run(MachineFunction & function, Functi
 {
 	MachineLegalizer legalizer(layout);
 	bool frameFinalized = false;
+	std::vector<PhysicalReg> savedCalleeRegs;
 	RADebugContext debug;
 	debug.enabled = debugEnabledByEnv();
 	debug.dir = debugDirFromEnv();
+	const bool timingEnabled = timingEnabledByEnv();
 
 	for (int iteration = 0; iteration < maxIterations; ++iteration) {
+		const auto iterationStart = std::chrono::steady_clock::now();
 		legalizer.run(function, true);
+		const auto legalizeEnd = std::chrono::steady_clock::now();
 
 		MachineCFGBuilder cfgBuilder;
 		cfgBuilder.run(function);
 		MachineLivenessAnalysis livenessAnalysis;
 		MachineLivenessResult liveness = livenessAnalysis.run(function);
+		const auto livenessEnd = std::chrono::steady_clock::now();
 
 		IRCState state = buildIRCState(function, liveness);
+		const auto buildEnd = std::chrono::steady_clock::now();
 		runWorklists(state);
 		const bool colored = assignColors(state);
+		const auto colorEnd = std::chrono::steady_clock::now();
+		if (timingEnabled) {
+			const auto legalizeMs = std::chrono::duration_cast<std::chrono::milliseconds>(legalizeEnd - iterationStart).count();
+			const auto livenessMs = std::chrono::duration_cast<std::chrono::milliseconds>(livenessEnd - legalizeEnd).count();
+			const auto buildMs = std::chrono::duration_cast<std::chrono::milliseconds>(buildEnd - livenessEnd).count();
+			const auto colorMs = std::chrono::duration_cast<std::chrono::milliseconds>(colorEnd - buildEnd).count();
+			std::cerr << "[ra] " << function.name() << " iter=" << iteration
+					  << " blocks=" << function.blocks().size()
+					  << " insts=" << instructionCount(function)
+					  << " vregs=" << maxReferencedVirtualReg(function)
+					  << " nodes=" << state.classes.size()
+					  << " edges=" << state.adjSet.size()
+					  << " moves=" << state.moves.size()
+					  << " colored=" << (colored ? "yes" : "no")
+					  << " legalize=" << legalizeMs << "ms"
+					  << " liveness=" << livenessMs << "ms"
+					  << " build=" << buildMs << "ms"
+					  << " color=" << colorMs << "ms\n";
+		}
 		if (debug.enabled) {
 			RADebugIteration record;
 			record.iteration = iteration;
@@ -1475,8 +1531,9 @@ bool IteratedRegisterCoalescingAllocator::run(MachineFunction & function, Functi
 
 		auto assignment = exportAssignment(state);
 		if (!frameFinalized) {
-			debug.savedCalleeRegs = usedCalleeSavedRegs(assignment);
-			preserveCalleeSavedRegisters(function, layout, assignment);
+			savedCalleeRegs = usedCalleeSavedRegs(assignment);
+			debug.savedCalleeRegs = savedCalleeRegs;
+			preserveCalleeSavedRegisters(function, layout, savedCalleeRegs);
 			rewriteFrameSetup(function, layout);
 			legalizer.run(function, false);
 			frameFinalized = true;
@@ -1485,6 +1542,15 @@ bool IteratedRegisterCoalescingAllocator::run(MachineFunction & function, Functi
 
 		debug.finalAssignment = assignment;
 		debug.finalCalleeRegs = usedCalleeSavedRegs(assignment);
+		const auto missingCalleeRegs = missingCalleeSavedRegs(debug.finalCalleeRegs, savedCalleeRegs);
+		if (!missingCalleeRegs.empty()) {
+			preserveCalleeSavedRegisters(function, layout, missingCalleeRegs);
+			appendUniqueRegs(savedCalleeRegs, missingCalleeRegs);
+			debug.savedCalleeRegs = savedCalleeRegs;
+			rewriteFrameSetup(function, layout);
+			legalizer.run(function, false);
+			continue;
+		}
 		applyAssignment(function, assignment);
 		debug.verifyOk = verifyNoVirtualRegs(function);
 		debug.success = debug.verifyOk;

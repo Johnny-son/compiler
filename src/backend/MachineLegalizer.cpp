@@ -57,6 +57,26 @@ bool MachineLegalizer::isFrameSetupInstruction(const MachineInstr & inst)
 	return false;
 }
 
+bool MachineLegalizer::isFrameTeardownInstruction(const MachineInstr & inst)
+{
+	if (inst.opcode == MachineOpcode::ADDI && inst.operands.size() >= 3) {
+		return inst.operands[0].kind == MachineOperandKind::PhysicalReg &&
+			   inst.operands[1].kind == MachineOperandKind::PhysicalReg &&
+			   inst.operands[0].preg == PhysicalReg::SP && inst.operands[1].preg == PhysicalReg::SP &&
+			   inst.operands[2].kind == MachineOperandKind::Immediate && inst.operands[2].imm > 0;
+	}
+
+	if (inst.opcode == MachineOpcode::LD && inst.operands.size() >= 2 &&
+		inst.operands[0].kind == MachineOperandKind::PhysicalReg &&
+		(inst.operands[0].preg == PhysicalReg::RA || inst.operands[0].preg == PhysicalReg::FP) &&
+		inst.operands[1].kind == MachineOperandKind::Memory && inst.operands[1].memoryBaseIsPhysical &&
+		(inst.operands[1].memoryBasePreg == PhysicalReg::SP || inst.operands[1].memoryBasePreg == PhysicalReg::FP)) {
+		return true;
+	}
+
+	return false;
+}
+
 void MachineLegalizer::legalizeInstruction(
 	MachineFunction & function,
 	std::vector<MachineInstr> & output,
@@ -64,6 +84,11 @@ void MachineLegalizer::legalizeInstruction(
 {
 	if (isFrameSetupInstruction(inst)) {
 		legalizeFrameSetupInstruction(output, inst);
+		return;
+	}
+
+	if (isFrameTeardownInstruction(inst)) {
+		legalizeFrameTeardownInstruction(output, inst);
 		return;
 	}
 
@@ -86,6 +111,45 @@ void MachineLegalizer::legalizeInstruction(
 }
 
 void MachineLegalizer::legalizeFrameSetupInstruction(
+	std::vector<MachineInstr> & output,
+	const MachineInstr & inst) const
+{
+	if (inst.opcode == MachineOpcode::ADDI) {
+		if (inst.operands.size() < 3 || inst.operands[2].kind != MachineOperandKind::Immediate ||
+			isSigned12Bit(inst.operands[2].imm)) {
+			output.push_back(inst);
+			return;
+		}
+
+		MachineOperand imm = materializeImmediateInScratch(output, inst.operands[2].imm);
+		MachineInstr add = inst;
+		add.opcode = MachineOpcode::ADD;
+		add.operands[2] = imm;
+		output.push_back(add);
+		return;
+	}
+
+	if (isMemoryOpcode(inst.opcode)) {
+		MachineInstr legalized = inst;
+		for (auto & operand: legalized.operands) {
+			if (operand.kind != MachineOperandKind::Memory || !operand.memoryBaseIsPhysical ||
+				isSigned12Bit(operand.memoryOffset)) {
+				continue;
+			}
+			MachineOperand address = materializeAddressInScratch(
+				output,
+				MachineOperand::pregUse(operand.memoryBasePreg),
+				operand.memoryOffset);
+			operand = MachineOperand::mem(address.preg, 0);
+		}
+		output.push_back(legalized);
+		return;
+	}
+
+	output.push_back(inst);
+}
+
+void MachineLegalizer::legalizeFrameTeardownInstruction(
 	std::vector<MachineInstr> & output,
 	const MachineInstr & inst) const
 {
