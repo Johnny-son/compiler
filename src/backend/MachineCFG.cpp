@@ -18,24 +18,18 @@ void MachineCFGBuilder::run(MachineFunction & function) const
 		const auto & insts = blocks[index].instructions();
 		bool hasBarrier = false;
 
-		for (auto instIndex = insts.size(); instIndex > 0; --instIndex) {
-			const auto & inst = insts[instIndex - 1];
-			if (!isTerminator(inst.opcode)) {
-				break;
+		for (const auto & inst: insts) {
+			std::string label;
+			if (targetLabel(inst, label)) {
+				auto target = labelToIndex.find(label);
+				if (target != labelToIndex.end()) {
+					addEdge(function, index, target->second);
+				}
 			}
 
 			if (isBarrierTerminator(inst.opcode)) {
 				hasBarrier = true;
-			}
-
-			std::string label;
-			if (!targetLabel(inst, label)) {
-				continue;
-			}
-
-			auto target = labelToIndex.find(label);
-			if (target != labelToIndex.end()) {
-				addEdge(function, index, target->second);
+				break;
 			}
 		}
 

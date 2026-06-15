@@ -1,5 +1,6 @@
 #include "BackendDriver.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
@@ -16,6 +17,7 @@
 #include "IRAdapter.h"
 #include "InstructionSelector.h"
 #include "IteratedRegisterCoalescingAllocator.h"
+#include "LinearScanRegisterAllocator.h"
 #include "MachineDCE.h"
 #include "MachineInstCombine.h"
 #include "MachineLocalCSE.h"
@@ -23,6 +25,8 @@
 #include "MachineAsmLowering.h"
 #include "Module.h"
 #include "Type.h"
+#include "BasicBlock.h"
+#include "CallInst.h"
 #include "GlobalVariable.h"
 
 namespace {
@@ -185,6 +189,80 @@ std::string debugTagFromOutputFile(const std::string & outputFile)
 	return path.stem().string();
 }
 
+std::size_t maxReferencedVirtualReg(const MachineFunction & function)
+{
+	int32_t maxVReg = -1;
+	for (const auto & block: function.blocks()) {
+		for (const auto & inst: block.instructions()) {
+			for (const auto & operand: inst.operands) {
+				if (operand.kind == MachineOperandKind::VirtualReg) {
+					maxVReg = std::max(maxVReg, operand.vreg);
+				} else if (operand.kind == MachineOperandKind::Memory && !operand.memoryBaseIsPhysical) {
+					maxVReg = std::max(maxVReg, operand.memoryBaseVReg);
+				}
+			}
+		}
+	}
+	return maxVReg < 0 ? 0 : static_cast<std::size_t>(maxVReg + 1);
+}
+
+std::size_t callCount(Function * function)
+{
+	if (function == nullptr) {
+		return 0;
+	}
+
+	std::size_t count = 0;
+	for (auto * block: function->getBasicBlocks()) {
+		if (block == nullptr) {
+			continue;
+		}
+		for (auto * inst: block->getInstructions()) {
+			if (dynamic_cast<CallInst *>(inst) != nullptr) {
+				++count;
+			}
+		}
+	}
+	return count;
+}
+
+bool hasOnlyScalarIntParams(Function * function)
+{
+	if (function == nullptr) {
+		return false;
+	}
+
+	for (auto * param: function->getParams()) {
+		if (param == nullptr || param->getType() == nullptr || !param->getType()->isInt32Type()) {
+			return false;
+		}
+	}
+	return true;
+}
+
+bool shouldUseLinearScan(const MachineFunction & machineFunction, Function * irFunction)
+{
+	if (irFunction == nullptr) {
+		return false;
+	}
+
+	const std::size_t vregs = maxReferencedVirtualReg(machineFunction);
+	const std::size_t blocks = machineFunction.blocks().size();
+	const std::size_t calls = callCount(irFunction);
+	const std::size_t paramCount = irFunction->getParams().size();
+	const std::size_t maxCallArgCount = static_cast<std::size_t>(irFunction->getMaxFuncCallArgCnt());
+
+	if (vregs >= 800 && calls == 0 && paramCount >= 300 && hasOnlyScalarIntParams(irFunction)) {
+		return true;
+	}
+
+	if (vregs >= 300) {
+		return blocks <= 4 && calls <= 2 && maxCallArgCount >= 300;
+	}
+
+	return false;
+}
+
 bool backendTimingEnabled()
 {
 	const char * enabled = std::getenv("MINIC_BACKEND_TIMING");
@@ -315,10 +393,19 @@ bool BackendDriver::run(Module * module, const std::string & outputFile) const
 		}
 		{
 			BackendStageTimer timer(timingEnabled, functionName, "ra");
-			IteratedRegisterCoalescingAllocator allocator(debugTagFromOutputFile(outputFile));
-			if (!allocator.run(machineFunction, layout)) {
-				fclose(fp);
-				return false;
+			auto * irFunction = dynamic_cast<Function *>(function.raw());
+			if (shouldUseLinearScan(machineFunction, irFunction)) {
+				LinearScanRegisterAllocator allocator;
+				if (!allocator.run(machineFunction, layout)) {
+					fclose(fp);
+					return false;
+				}
+			} else {
+				IteratedRegisterCoalescingAllocator allocator(debugTagFromOutputFile(outputFile));
+				if (!allocator.run(machineFunction, layout)) {
+					fclose(fp);
+					return false;
+				}
 			}
 		}
 		{
