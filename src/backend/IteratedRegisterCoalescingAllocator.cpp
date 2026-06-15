@@ -322,6 +322,11 @@ struct RADebugIteration {
 	std::size_t initialNodes = 0;
 	std::size_t interferenceEdges = 0;
 	std::size_t moveCount = 0;
+	std::size_t coalescedMoveCount = 0;
+	std::size_t constrainedMoveCount = 0;
+	std::size_t frozenMoveCount = 0;
+	std::size_t activeMoveCount = 0;
+	std::size_t coalescedNodeCount = 0;
 	bool colored = false;
 	std::vector<int32_t> spilledVRegs;
 };
@@ -594,22 +599,40 @@ std::optional<IRCNode> nodeForRegOperand(
 	return std::nullopt;
 }
 
-void collectMove(IRCState & state, const MachineFunction & function, const MachineInstr & inst)
+std::optional<std::pair<int32_t, int32_t>> coalescableVRegCopyPair(
+	const MachineFunction & function,
+	const MachineInstr & inst)
 {
 	if (inst.opcode != MachineOpcode::COPY || inst.operands.size() < 2) {
+		return std::nullopt;
+	}
+
+	const auto & dst = inst.operands[0];
+	const auto & src = inst.operands[1];
+	if (dst.kind != MachineOperandKind::VirtualReg || dst.role != MachineOperandRole::Def ||
+		src.kind != MachineOperandKind::VirtualReg || src.role != MachineOperandRole::Use ||
+		dst.vreg == src.vreg || function.registerClass(dst.vreg) != function.registerClass(src.vreg)) {
+		return std::nullopt;
+	}
+
+	return std::make_pair(dst.vreg, src.vreg);
+}
+
+void collectMove(IRCState & state, const MachineFunction & function, const MachineInstr & inst)
+{
+	auto pair = coalescableVRegCopyPair(function, inst);
+	if (!pair.has_value()) {
 		return;
 	}
 
-	auto dst = nodeForRegOperand(state, function, inst.operands[0]);
-	auto src = nodeForRegOperand(state, function, inst.operands[1]);
-	if (!dst.has_value() || !src.has_value() || *dst == *src || classOf(state, *dst) != classOf(state, *src)) {
-		return;
-	}
-
+	addVirtualNode(state, function, pair->first);
+	addVirtualNode(state, function, pair->second);
+	IRCNode dst = IRCNode::virtualReg(pair->first);
+	IRCNode src = IRCNode::virtualReg(pair->second);
 	const MoveId id = state.moves.size();
-	state.moves.push_back(IRCMove{*dst, *src});
-	state.moveList[*dst].insert(id);
-	state.moveList[*src].insert(id);
+	state.moves.push_back(IRCMove{dst, src});
+	state.moveList[dst].insert(id);
+	state.moveList[src].insert(id);
 	state.worklistMoves.insert(id);
 }
 
@@ -730,11 +753,15 @@ IRCState buildIRCState(const MachineFunction & function, const MachineLivenessRe
 			}
 
 			collectMove(state, function, inst);
+			const auto copyPair = coalescableVRegCopyPair(function, inst);
 
 			for (int32_t def: info.def) {
 				IRCNode defNode = IRCNode::virtualReg(def);
 				addVirtualNode(state, function, def);
 				for (int32_t live: info.liveOut) {
+					if (copyPair.has_value() && def == copyPair->first && live == copyPair->second) {
+						continue;
+					}
 					IRCNode liveNode = IRCNode::virtualReg(live);
 					if (classOf(state, defNode) == classOf(state, liveNode)) {
 						addEdge(state, defNode, liveNode);
@@ -763,17 +790,136 @@ IRCState buildIRCState(const MachineFunction & function, const MachineLivenessRe
 	return state;
 }
 
+bool moveRelated(const IRCState & state, IRCNode node);
+
 void makeWorklist(IRCState & state)
 {
 	for (IRCNode node: state.initial) {
 		state.activeNodes.insert(node);
-		if (currentDegree(state, node) < colorCountFor(state, node)) {
-			state.simplifyWorklist.insert(node);
-		} else {
+		if (currentDegree(state, node) >= colorCountFor(state, node)) {
 			state.spillWorklist.insert(node);
+		} else if (moveRelated(state, node)) {
+			state.freezeWorklist.insert(node);
+		} else {
+			state.simplifyWorklist.insert(node);
 		}
 	}
 	state.initial.clear();
+}
+
+std::optional<IRCNode> getAlias(const IRCState & state, IRCNode node, std::set<IRCNode> & visiting)
+{
+	if (!visiting.insert(node).second) {
+		return std::nullopt;
+	}
+
+	auto aliasIter = state.alias.find(node);
+	if (aliasIter == state.alias.end()) {
+		if (state.coalescedNodes.find(node) != state.coalescedNodes.end()) {
+			return std::nullopt;
+		}
+		visiting.erase(node);
+		return node;
+	}
+	if (state.coalescedNodes.find(node) == state.coalescedNodes.end()) {
+		return std::nullopt;
+	}
+
+	auto result = getAlias(state, aliasIter->second, visiting);
+	visiting.erase(node);
+	return result;
+}
+
+std::optional<IRCNode> getAlias(const IRCState & state, IRCNode node)
+{
+	std::set<IRCNode> visiting;
+	return getAlias(state, node, visiting);
+}
+
+std::set<MoveId> nodeMoves(const IRCState & state, IRCNode node)
+{
+	std::set<MoveId> result;
+	auto iter = state.moveList.find(node);
+	if (iter == state.moveList.end()) {
+		return result;
+	}
+
+	for (MoveId move: iter->second) {
+		if (state.activeMoves.find(move) != state.activeMoves.end() ||
+			state.worklistMoves.find(move) != state.worklistMoves.end()) {
+			result.insert(move);
+		}
+	}
+	return result;
+}
+
+bool moveRelated(const IRCState & state, IRCNode node)
+{
+	return !nodeMoves(state, node).empty();
+}
+
+void addWorkList(IRCState & state, IRCNode node)
+{
+	if (node.isPhysical() || currentDegree(state, node) >= colorCountFor(state, node) || moveRelated(state, node)) {
+		return;
+	}
+
+	auto iter = state.freezeWorklist.find(node);
+	if (iter != state.freezeWorklist.end()) {
+		state.freezeWorklist.erase(iter);
+		state.simplifyWorklist.insert(node);
+	}
+}
+
+void removeFromNodeWorklists(IRCState & state, IRCNode node)
+{
+	state.simplifyWorklist.erase(node);
+	state.freezeWorklist.erase(node);
+	state.spillWorklist.erase(node);
+	state.activeNodes.erase(node);
+}
+
+std::set<IRCNode> activeAdjacentVirtualNodes(const IRCState & state, IRCNode node)
+{
+	std::set<IRCNode> result;
+	auto iter = state.adjList.find(node);
+	if (iter == state.adjList.end()) {
+		return result;
+	}
+
+	for (IRCNode neighbor: iter->second) {
+		if (!neighbor.isVirtual()) {
+			continue;
+		}
+		auto alias = getAlias(state, neighbor);
+		if (!alias.has_value() || !alias->isVirtual() || *alias == node) {
+			continue;
+		}
+		if (state.activeNodes.find(*alias) != state.activeNodes.end()) {
+			result.insert(*alias);
+		}
+	}
+	return result;
+}
+
+void enableMovesForNode(IRCState & state, IRCNode node)
+{
+	const auto moves = nodeMoves(state, node);
+	for (MoveId move: moves) {
+		auto iter = state.activeMoves.find(move);
+		if (iter != state.activeMoves.end()) {
+			state.activeMoves.erase(iter);
+			state.worklistMoves.insert(move);
+		}
+	}
+}
+
+void enableMoves(IRCState & state, IRCNode node)
+{
+	enableMovesForNode(state, node);
+	for (IRCNode neighbor: activeAdjacentVirtualNodes(state, node)) {
+		enableMovesForNode(state, neighbor);
+	}
 }
 
 void decrementDegree(IRCState & state, IRCNode node)
@@ -782,10 +928,15 @@ void decrementDegree(IRCState & state, IRCNode node)
 	const int newDegree = oldDegree - 1;
 	state.degree[node] = newDegree;
 	if (oldDegree >= colorCountFor(state, node) && newDegree < colorCountFor(state, node)) {
+		enableMoves(state, node);
 		auto iter = state.spillWorklist.find(node);
 		if (iter != state.spillWorklist.end()) {
 			state.spillWorklist.erase(iter);
-			state.simplifyWorklist.insert(node);
+			if (moveRelated(state, node)) {
+				state.freezeWorklist.insert(node);
+			} else {
+				state.simplifyWorklist.insert(node);
+			}
 		}
 	}
 }
@@ -813,6 +964,204 @@ void simplifyOne(IRCState & state)
 	}
 }
 
+bool adjacent(const IRCState & state, IRCNode lhs, IRCNode rhs)
+{
+	return state.adjSet.find(orderedEdge(lhs, rhs)) != state.adjSet.end();
+}
+
+bool significantNeighbor(const IRCState & state, IRCNode node)
+{
+	if (node.isPhysical()) {
+		return true;
+	}
+	return currentDegree(state, node) >= colorCountFor(state, node);
+}
+
+std::optional<bool> conservativeBriggs(const IRCState & state, IRCNode lhs, IRCNode rhs)
+{
+	std::set<IRCNode> neighbors;
+	for (IRCNode node: {lhs, rhs}) {
+		auto iter = state.adjList.find(node);
+		if (iter == state.adjList.end()) {
+			continue;
+		}
+		for (IRCNode neighbor: iter->second) {
+			auto alias = getAlias(state, neighbor);
+			if (!alias.has_value()) {
+				return std::nullopt;
+			}
+			if (*alias == lhs || *alias == rhs) {
+				continue;
+			}
+			neighbors.insert(*alias);
+		}
+	}
+
+	int significant = 0;
+	for (IRCNode neighbor: neighbors) {
+		if (significantNeighbor(state, neighbor)) {
+			++significant;
+		}
+	}
+	return significant < colorCountFor(state, lhs);
+}
+
+int recomputeDegree(const IRCState & state, IRCNode node)
+{
+	std::set<IRCNode> neighbors;
+	auto iter = state.adjList.find(node);
+	if (iter == state.adjList.end()) {
+		return 0;
+	}
+
+	for (IRCNode neighbor: iter->second) {
+		auto alias = getAlias(state, neighbor);
+		if (!alias.has_value() || *alias == node) {
+			continue;
+		}
+		if (alias->isPhysical() || state.activeNodes.find(*alias) != state.activeNodes.end()) {
+			neighbors.insert(*alias);
+		}
+	}
+	return static_cast<int>(neighbors.size());
+}
+
+bool combine(IRCState & state, IRCNode representative, IRCNode merged)
+{
+	removeFromNodeWorklists(state, merged);
+	state.coalescedNodes.insert(merged);
+	state.alias[merged] = representative;
+
+	auto moveIter = state.moveList.find(merged);
+	if (moveIter != state.moveList.end()) {
+		state.moveList[representative].insert(moveIter->second.begin(), moveIter->second.end());
+	}
+	enableMovesForNode(state, merged);
+
+	auto neighborIter = state.adjList.find(merged);
+	if (neighborIter != state.adjList.end()) {
+		const std::vector<IRCNode> neighbors(neighborIter->second.begin(), neighborIter->second.end());
+		for (IRCNode neighbor: neighbors) {
+			auto alias = getAlias(state, neighbor);
+			if (!alias.has_value()) {
+				return false;
+			}
+			if (*alias == representative || *alias == merged) {
+				continue;
+			}
+			addEdge(state, *alias, representative);
+			if (alias->isVirtual() && state.activeNodes.find(*alias) != state.activeNodes.end()) {
+				decrementDegree(state, *alias);
+			}
+		}
+	}
+
+	state.degree[representative] = recomputeDegree(state, representative);
+	if (currentDegree(state, representative) >= colorCountFor(state, representative) &&
+		state.freezeWorklist.find(representative) != state.freezeWorklist.end()) {
+		state.freezeWorklist.erase(representative);
+		state.spillWorklist.insert(representative);
+	}
+	addWorkList(state, representative);
+	return true;
+}
+
+bool coalesceOne(IRCState & state)
+{
+	if (state.worklistMoves.empty()) {
+		return true;
+	}
+
+	const MoveId move = *state.worklistMoves.begin();
+	state.worklistMoves.erase(state.worklistMoves.begin());
+	if (move >= state.moves.size()) {
+		return false;
+	}
+
+	auto lhs = getAlias(state, state.moves[move].dst);
+	auto rhs = getAlias(state, state.moves[move].src);
+	if (!lhs.has_value() || !rhs.has_value()) {
+		return false;
+	}
+
+	if (*lhs == *rhs) {
+		state.coalescedMoves.insert(move);
+		addWorkList(state, *lhs);
+		return true;
+	}
+
+	if (!lhs->isVirtual() || !rhs->isVirtual() || classOf(state, *lhs) != classOf(state, *rhs)) {
+		state.constrainedMoves.insert(move);
+		addWorkList(state, *lhs);
+		addWorkList(state, *rhs);
+		return true;
+	}
+
+	IRCNode representative = lhs->vreg <= rhs->vreg ? *lhs : *rhs;
+	IRCNode merged = representative == *lhs ? *rhs : *lhs;
+	if (adjacent(state, representative, merged)) {
+		state.constrainedMoves.insert(move);
+		addWorkList(state, representative);
+		addWorkList(state, merged);
+		return true;
+	}
+
+	auto conservative = conservativeBriggs(state, representative, merged);
+	if (!conservative.has_value()) {
+		return false;
+	}
+	if (*conservative) {
+		state.coalescedMoves.insert(move);
+		if (!combine(state, representative, merged)) {
+			return false;
+		}
+		addWorkList(state, representative);
+	} else {
+		state.activeMoves.insert(move);
+	}
+	return true;
+}
+
+bool freezeMoves(IRCState & state, IRCNode node)
+{
+	const auto moves = nodeMoves(state, node);
+	for (MoveId move: moves) {
+		if (move >= state.moves.size()) {
+			return false;
+		}
+		state.activeMoves.erase(move);
+		state.worklistMoves.erase(move);
+		state.frozenMoves.insert(move);
+
+		auto dst = getAlias(state, state.moves[move].dst);
+		auto src = getAlias(state, state.moves[move].src);
+		if (!dst.has_value() || !src.has_value()) {
+			return false;
+		}
+		IRCNode other = *dst == node ? *src : *dst;
+		if (other.isVirtual() && !moveRelated(state, other) && currentDegree(state, other) < colorCountFor(state, other)) {
+			auto iter = state.freezeWorklist.find(other);
+			if (iter != state.freezeWorklist.end()) {
+				state.freezeWorklist.erase(iter);
+				state.simplifyWorklist.insert(other);
+			}
+		}
+	}
+	return true;
+}
+
+bool freezeOne(IRCState & state)
+{
+	if (state.freezeWorklist.empty()) {
+		return true;
+	}
+
+	IRCNode node = *state.freezeWorklist.begin();
+	state.freezeWorklist.erase(state.freezeWorklist.begin());
+	state.simplifyWorklist.insert(node);
+	return freezeMoves(state, node);
+}
+
 IRCNode lowestSpillPriorityNode(const std::set<IRCNode> & nodes, const IRCState & state)
 {
 	IRCNode best;
@@ -834,27 +1183,46 @@ IRCNode lowestSpillPriorityNode(const std::set<IRCNode> & nodes, const IRCState 
 	return best;
 }
 
-void selectSpill(IRCState & state)
+bool selectSpill(IRCState & state)
 {
 	if (state.spillWorklist.empty()) {
-		return;
+		return true;
 	}
 
 	IRCNode node = lowestSpillPriorityNode(state.spillWorklist, state);
 	state.spillWorklist.erase(node);
 	state.simplifyWorklist.insert(node);
+	return freezeMoves(state, node);
 }
 
-void runWorklists(IRCState & state)
+bool runWorklists(IRCState & state)
 {
 	makeWorklist(state);
-	while (!state.simplifyWorklist.empty() || !state.spillWorklist.empty()) {
+	std::size_t steps = 0;
+	const std::size_t maxSteps =
+		std::max<std::size_t>(1024, state.classes.size() * 4 + std::max<std::size_t>(state.moves.size(), 1) * 8);
+	while (!state.simplifyWorklist.empty() || !state.worklistMoves.empty() ||
+		   !state.freezeWorklist.empty() || !state.spillWorklist.empty()) {
+		if (++steps > maxSteps) {
+			return false;
+		}
 		if (!state.simplifyWorklist.empty()) {
 			simplifyOne(state);
+		} else if (!state.worklistMoves.empty()) {
+			if (!coalesceOne(state)) {
+				return false;
+			}
+		} else if (!state.freezeWorklist.empty()) {
+			if (!freezeOne(state)) {
+				return false;
+			}
 		} else {
-			selectSpill(state);
+			if (!selectSpill(state)) {
+				return false;
+			}
 		}
 	}
+	return true;
 }
 
 std::vector<PhysicalReg> candidateRegsFor(const IRCState & state, IRCNode node)
@@ -862,7 +1230,13 @@ std::vector<PhysicalReg> candidateRegsFor(const IRCState & state, IRCNode node)
 	return allocatableRegsFor(classOf(state, node));
 }
 
-bool assignColors(IRCState & state)
+enum class AssignResult : std::int8_t {
+	Success,
+	NeedRewrite,
+	FatalFailure
+};
+
+AssignResult assignColors(IRCState & state)
 {
 	while (!state.selectStack.empty()) {
 		IRCNode node = state.selectStack.back();
@@ -872,6 +1246,16 @@ bool assignColors(IRCState & state)
 		auto neighborIter = state.adjList.find(node);
 		if (neighborIter != state.adjList.end()) {
 			for (IRCNode neighbor: neighborIter->second) {
+				if (neighbor.isVirtual()) {
+					auto alias = getAlias(state, neighbor);
+					if (!alias.has_value()) {
+						return AssignResult::FatalFailure;
+					}
+					neighbor = *alias;
+				}
+				if (neighbor == node) {
+					continue;
+				}
 				auto colorIter = state.color.find(neighbor);
 				if (colorIter != state.color.end()) {
 					used.insert(colorIter->second);
@@ -896,7 +1280,23 @@ bool assignColors(IRCState & state)
 		state.color[node] = *selected;
 	}
 
-	return state.spilledNodes.empty();
+	if (!state.spilledNodes.empty()) {
+		return AssignResult::NeedRewrite;
+	}
+
+	for (IRCNode node: state.coalescedNodes) {
+		auto alias = getAlias(state, node);
+		if (!alias.has_value()) {
+			return AssignResult::FatalFailure;
+		}
+		auto colorIter = state.color.find(*alias);
+		if (colorIter == state.color.end()) {
+			return AssignResult::FatalFailure;
+		}
+		state.color[node] = colorIter->second;
+	}
+
+	return AssignResult::Success;
 }
 
 std::unordered_map<int32_t, PhysicalReg> exportAssignment(const IRCState & state)
@@ -1305,10 +1705,13 @@ void writeRADebugReport(
 	out << "callee_saved_match: " << (sameRegSet(debug.savedCalleeRegs, debug.finalCalleeRegs) ? "yes" : "no") << "\n";
 	out << "final_memory_ops: " << memoryOps << "\n";
 	out << "final_copy_ops: " << copies << "\n";
-	out << "\niteration,blocks,instructions,referenced_vregs,initial_nodes,edges,moves,colored,spilled\n";
+	out << "\niteration,blocks,instructions,referenced_vregs,initial_nodes,edges,moves,coalesced_moves,"
+		   "constrained_moves,frozen_moves,active_moves,coalesced_nodes,colored,spilled\n";
 	for (const auto & iter: debug.iterations) {
 		out << iter.iteration << "," << iter.blocks << "," << iter.instructions << "," << iter.virtualRegs << ","
 			<< iter.initialNodes << "," << iter.interferenceEdges << "," << iter.moveCount << ","
+			<< iter.coalescedMoveCount << "," << iter.constrainedMoveCount << ","
+			<< iter.frozenMoveCount << "," << iter.activeMoveCount << "," << iter.coalescedNodeCount << ","
 			<< (iter.colored ? "yes" : "no") << "," << joinVRegs(iter.spilledVRegs) << "\n";
 	}
 	out << "\nopcode_counts:\n";
@@ -1471,8 +1874,18 @@ bool IteratedRegisterCoalescingAllocator::run(MachineFunction & function, Functi
 
 		IRCState state = buildIRCState(function, liveness);
 		const auto buildEnd = std::chrono::steady_clock::now();
-		runWorklists(state);
-		const bool colored = assignColors(state);
+		if (!runWorklists(state)) {
+			debug.failureReason = "IRC worklist loop did not converge or alias state is invalid";
+			writeRADebugReport(function, layout, debug, debugTag);
+			return false;
+		}
+		const AssignResult assignResult = assignColors(state);
+		if (assignResult == AssignResult::FatalFailure) {
+			debug.failureReason = "IRC color assignment alias state is invalid";
+			writeRADebugReport(function, layout, debug, debugTag);
+			return false;
+		}
+		const bool colored = assignResult == AssignResult::Success;
 		const auto colorEnd = std::chrono::steady_clock::now();
 		if (timingEnabled) {
 			const auto legalizeMs = std::chrono::duration_cast<std::chrono::milliseconds>(legalizeEnd - iterationStart).count();
@@ -1486,6 +1899,8 @@ bool IteratedRegisterCoalescingAllocator::run(MachineFunction & function, Functi
 					  << " nodes=" << state.classes.size()
 					  << " edges=" << state.adjSet.size()
 					  << " moves=" << state.moves.size()
+					  << " coalesced=" << state.coalescedMoves.size()
+					  << " frozen=" << state.frozenMoves.size()
 					  << " colored=" << (colored ? "yes" : "no")
 					  << " legalize=" << legalizeMs << "ms"
 					  << " liveness=" << livenessMs << "ms"
@@ -1501,6 +1916,11 @@ bool IteratedRegisterCoalescingAllocator::run(MachineFunction & function, Functi
 			record.initialNodes = state.classes.size();
 			record.interferenceEdges = state.adjSet.size();
 			record.moveCount = state.moves.size();
+			record.coalescedMoveCount = state.coalescedMoves.size();
+			record.constrainedMoveCount = state.constrainedMoves.size();
+			record.frozenMoveCount = state.frozenMoves.size();
+			record.activeMoveCount = state.activeMoves.size();
+			record.coalescedNodeCount = state.coalescedNodes.size();
 			record.colored = colored;
 			for (IRCNode node: state.spilledNodes) {
 				if (node.isVirtual()) {
